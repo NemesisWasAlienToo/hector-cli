@@ -1,0 +1,42 @@
+version: "0.1"
+renode_version: "1.16.1"
+
+# Demonstrates the `build:` step + sim-independent `shell` tests, with NO machine
+# at all. The build step writes a file into the project; the tests read it back.
+# Everything runs in containers with the project bind-mounted at the same path, so
+# files flow between build and tests for free — no copying, no plumbing.
+#
+# `build:` steps run before the simulation (here there's none) and abort the job on
+# the first failure. `shell` tests with `requires_sim: false` don't need Renode, so
+# this config needs no `machines:` block.
+
+build:
+  - name: Generate input
+    image: python:3.12-slim          # a pinned toolchain — no Renode involved
+    steps:
+      - name: write values.txt
+        script: |
+          mkdir -p generated
+          printf '10\n20\n12\n' > generated/values.txt
+
+tests:
+  # Reads the build output in a clean Python container and asserts on it.
+  - name: Validate generated file
+    type: shell
+    requires_sim: false
+    image: python:3.12-slim
+    steps:
+      - name: sum must be 42
+        script: |
+          python3 checks/verify.py
+
+  # A second image, showing the build output is visible here too.
+  - name: Shell tooling check
+    type: shell
+    requires_sim: false
+    image: alpine:3.19
+    steps:
+      - name: file exists and is readable
+        script: |
+          test -f generated/values.txt
+          echo "build output is visible to the test"

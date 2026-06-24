@@ -1,0 +1,82 @@
+version: "0.1"
+renode_version: "1.16.1"
+
+# ===========================================================================
+# Two Zynq-7000 (Zedboard) Linux machines on one Ethernet switch, pinging each
+# other. Unlike `zedboard-net` (guest <-> HOST over a TAP, which needs host
+# privileges and a manual host-side step), this is fully self-contained: no TAP,
+# no NET_ADMIN, no host config — so it runs anywhere `hector test` runs and is a
+# good networking regression test. It mirrors Renode's own two-Zedboard ping test.
+#
+# Topology:   zed1.gem0  <->  lan (switch)  <->  zed2.gem0
+#             192.168.1.1                         192.168.1.2
+#
+# (When a hub is present hector auto-sets the global quantum so cross-machine
+# traffic is deterministic.)
+# ===========================================================================
+
+arguments:
+  BIN: "https://dl.antmicro.com/projects/renode/zynq-interface-tests-vmlinux-s_14142952-ab5cd7445f31414fcbf8c79d49d737c669034ef2"
+  ROOTFS: "https://dl.antmicro.com/projects/renode/zynq--interface-tests-rootfs.ext2-s_16777216-191638e3b3832a81bebd21d555f67bf3a4d7882a"
+  DTB: "https://dl.antmicro.com/projects/renode/zynq-interface-tests-gem0.dtb-s_11724-f0dec8ffadea47891dfe2441215401f09f7242fa"
+
+hubs:
+  lan: { type: ethernet }      # Renode CreateSwitch
+
+machines:
+  zed1:
+    platform:
+      - platforms/boards/zedboard.repl
+    commands: |
+      sysbus Redirect 0xC0000000 0x0 0x10000000
+      ttc0 Frequency 33333333
+      ttc1 Frequency 33333333
+      cpu SetRegister 0 0x000
+      cpu SetRegister 1 0xD32
+      cpu SetRegister 2 0x100
+      sysbus LoadELF @${BIN}
+      sysbus LoadFdt @${DTB} 0x100 "console=ttyPS0,115200 root=/dev/ram0 rw initrd=0x1a000000,16M" false
+      sysbus ZeroRange 0x1a000000 0x1600000
+      sysbus LoadBinary @${ROOTFS} 0x1a000000
+
+  zed2:
+    platform:
+      - platforms/boards/zedboard.repl
+    commands: |
+      sysbus Redirect 0xC0000000 0x0 0x10000000
+      ttc0 Frequency 33333333
+      ttc1 Frequency 33333333
+      cpu SetRegister 0 0x000
+      cpu SetRegister 1 0xD32
+      cpu SetRegister 2 0x100
+      sysbus LoadELF @${BIN}
+      sysbus LoadFdt @${DTB} 0x100 "console=ttyPS0,115200 root=/dev/ram0 rw initrd=0x1a000000,16M" false
+      sysbus ZeroRange 0x1a000000 0x1600000
+      sysbus LoadBinary @${ROOTFS} 0x1a000000
+
+# Both NICs join the same switch.
+connections: |
+  zed1.gem0 <-> lan <-> zed2.gem0
+
+tests:
+  - name: Two machines ping each other over the switch
+    type: robot
+    steps:
+      - name: Boot both, assign IPs, ping zed1 -> zed2
+        script: |
+          ${t1}=    Create Terminal Tester    sysbus.uart0    machine=zed1
+          ${t2}=    Create Terminal Tester    sysbus.uart0    machine=zed2
+
+          Wait For Line On Uart     buildroot login:    timeout=90    testerId=${t1}
+          Wait For Line On Uart     buildroot login:    timeout=90    testerId=${t2}
+
+          Write Line To Uart        root    testerId=${t1}
+          Write Line To Uart        root    testerId=${t2}
+          Wait For Prompt On Uart   \#${SPACE}    testerId=${t1}
+          Wait For Prompt On Uart   \#${SPACE}    testerId=${t2}
+
+          Write Line To Uart        ifconfig eth0 up 192.168.1.1    testerId=${t1}
+          Write Line To Uart        ifconfig eth0 up 192.168.1.2    testerId=${t2}
+
+          Write Line To Uart        ping -c 5 192.168.1.2    testerId=${t1}
+          Wait For Line On Uart     0% packet loss    timeout=30    testerId=${t1}

@@ -1,0 +1,114 @@
+version: "0.1"
+renode_version: "1.16.1"
+
+artifacts:
+  - "*.xml"
+
+arguments:
+  BIN: "https://dl.antmicro.com/projects/renode/zephyr-stm32f103-button.elf-s_276760-1bf32c99bbb3c01d81e13ca68118eaf08b2a815f"
+  LINUX_BIN: "https://dl.antmicro.com/projects/renode/vexpress--vmlinux-vexpress--c2e36631a7ac4fced04258b63e5d80d25e0a18cc"
+  LINUX_ROOTFS: "https://dl.antmicro.com/projects/renode/cortex-a9--rootfs-minimal.cpio--abd8ed48b3dd3b0fec98f5ffb50fdd881fde40af"
+
+when:
+  branch: [main, "release/*"]
+  event: [push, pull_request, manual]
+  path: ["cli/**"]
+
+matrix:
+  variables:
+    NUM: [1]
+
+modules:
+  uartlite:
+    kind: renode-verilator
+    type: CoSimulated.CoSimulatedUART
+    source: "${INTEGRATION_DIR}/samples/uartlite"
+
+hubs:
+  uart_link:
+    type: uart
+
+machines:
+  stm32f103:
+    platform:
+      - platforms/cpus/stm32f103.repl
+
+    firmware: ${BIN}
+
+    peripherals:
+      button:
+        type: Miscellaneous.Button
+        at: gpioPortC 13
+      led:
+        type: Miscellaneous.LED
+        at: gpioPortA 5
+      uart_e:
+        type: uartlite
+        at: sysbus <0x70000000, +0x100>
+        frequency: 100000000
+
+    connections: |
+      button -> gpioPortC@13
+      gpioPortA@5 -> led@0
+
+    commands: |
+      showAnalyzer usart2
+
+  vexpress:
+    platform:
+      - platforms/boards/vexpress.repl
+    commands: |
+      sysbus Redirect 0xC0000000 0x80000000 0x20000000
+      cpu SetRegister 0 0x0
+      cpu SetRegister 1 0x8E0
+      cpu SetRegister 2 0x80000100
+      sysbus LoadELF @${LINUX_BIN}
+      sysbus ZeroRange 0x80800000 0x800000
+      sysbus LoadBinary @${LINUX_ROOTFS} 0x80800000
+      sysbus LoadAtags "console=ttyAMA0,115200 root=/dev/ram initrd=0x80800000,8M mem=512M vmalloc=256M earlyprintk" 0x20000000 0x80000100
+      cpu PC 0x80008000
+      showAnalyzer uart0
+
+connections: |
+  stm32f103.usart1 <-> uart_link <-> vexpress.uart1
+
+tests:
+  - name: Button press triggers UART output
+    type: robot
+    steps:
+      - name: Press button and verify usart2 output
+        script: |
+          Execute Command           mach set "stm32f103"
+          Create Terminal Tester    sysbus.usart2    machine=stm32f103
+
+          Execute Command           sysbus.gpioPortC.button Press
+          Execute Command           sysbus.gpioPortC.button Release
+
+          ${output}=    Wait For Line On Uart    Button pressed at    timeout=10
+          Log    ${output}[Line]    console=True
+          Should Match Regexp       ${output}[Line]    Button pressed at \\d+
+
+  - name: Linux boots on vexpress and UART link to STM32 is active
+    type: robot
+    steps:
+      - name: Boot Linux
+        script: |
+          Execute Command           mach set "vexpress"
+          Create Terminal Tester    sysbus.uart0    machine=vexpress
+
+          # hwclock appears twice at the very end of boot; second occurrence
+          # is the last newline-terminated line before the shell prompt.
+          Wait For Line On Uart     hwclock: can't open    timeout=30
+          Wait For Line On Uart     hwclock: can't open    timeout=30
+
+      - name: Verify UART link to STM32
+        script: |
+          Write Line To Uart        echo ping > /dev/ttyAMA1 && echo link_ok
+          Wait For Line On Uart     link_ok    timeout=10
+
+  - name: bashing
+    type: bash
+    steps:
+      - name: Echo test
+        script: |
+          echo "hi from matrix job NUM=${NUM}"

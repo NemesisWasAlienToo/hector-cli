@@ -1,0 +1,19 @@
+# Hector generated / runtime cache — safe to delete, rebuilt on next run.
+# (.hector/ has a trailing slash so it never matches the .hector.yaml config file.)
+.hector/
+.hectorci/
+results/
+
+# Renode source / integration checkouts cloned on demand
+renode*
+
+# Python build & bytecode
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+
+# Editors / local environment
+.vs*
+.claude
+.env

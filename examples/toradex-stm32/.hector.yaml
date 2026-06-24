@@ -1,0 +1,136 @@
+version: "0.1"
+renode_version: "1.16.1"
+
+# Versatile Express (ARM Cortex-A9, Linux) + STM32F103 (microcontroller).
+#
+# The Versatile Express is used here as the closest practical stand-in for a Toradex
+# Colibri/Verdin Linux board: ARM Cortex-A, runs Linux, has multiple accessible UARTs.
+# For production use, swap LINUX_BIN/LINUX_ROOTFS for a TorizonCore or Debian image
+# and replace the hardware section with the appropriate Toradex .repl file.
+#
+# UART topology:
+#   vexpress uart0 (ttyAMA0) = Linux console  --  exposed as TCP:5555 for VS Code terminal
+#   vexpress uart1 (ttyAMA1) <-> uart_link <-> stm32f103 usart2
+#
+# usart2 is the Zephyr firmware's logging UART — "Button pressed at <tick>" messages
+# are sent there, and they flow through uart_link to Linux's /dev/ttyAMA1.
+#
+# From the Linux shell (nc localhost 5555):
+#   mkdir /sys && mount -t sysfs sysfs /sys && mdev -s   # create /dev/ttyAMAx nodes
+#   stty -F /dev/ttyAMA1 115200 raw -echo
+#   cat /dev/ttyAMA1                                     # see STM32 output live
+
+arguments:
+  STM32_BIN:    "https://dl.antmicro.com/projects/renode/zephyr-stm32f103-button.elf-s_276760-1bf32c99bbb3c01d81e13ca68118eaf08b2a815f"
+  LINUX_BIN:    "https://dl.antmicro.com/projects/renode/vexpress--vmlinux-vexpress--c2e36631a7ac4fced04258b63e5d80d25e0a18cc"
+  LINUX_ROOTFS: "https://dl.antmicro.com/projects/renode/cortex-a9--rootfs-minimal.cpio--abd8ed48b3dd3b0fec98f5ffb50fdd881fde40af"
+
+hubs:
+  uart_link:
+    type: uart
+
+machines:
+  stm32f103:
+    platform:
+      - platforms/cpus/stm32f103.repl
+    firmware: ${STM32_BIN}
+    peripherals:
+      button:
+        type: Miscellaneous.Button
+        at: "gpioPortC 13"
+    connections: |
+      button -> gpioPortC@13
+    commands: |
+      showAnalyzer usart2
+
+  vexpress:
+    platform:
+      - platforms/boards/vexpress.repl
+    commands: |
+      sysbus Redirect 0xC0000000 0x80000000 0x20000000
+      cpu SetRegister 0 0x0
+      cpu SetRegister 1 0x8E0
+      cpu SetRegister 2 0x80000100
+      sysbus LoadELF @${LINUX_BIN}
+      sysbus ZeroRange 0x80800000 0x800000
+      sysbus LoadBinary @${LINUX_ROOTFS} 0x80800000
+      sysbus LoadAtags "console=ttyAMA0,115200 root=/dev/ram initrd=0x80800000,8M mem=512M vmalloc=256M earlyprintk" 0x20000000 0x80000100
+      cpu PC 0x80008000
+      showAnalyzer uart0
+
+# uart0 → TCP:5555: Linux console, connect with:  nc localhost 5555
+mappings: |
+  vexpress.uart0 -> tcp:5555
+
+# usart2 carries the Zephyr log output; routing it to uart_link delivers it to ttyAMA1.
+connections: |
+  stm32f103.usart2 <-> uart_link <-> vexpress.uart1
+
+tests:
+  - name: Linux boots on Versatile Express
+    type: robot
+    steps:
+      - name: Wait for boot
+        script: |
+          Execute Command           mach set "vexpress"
+          Create Terminal Tester    sysbus.uart0    machine=vexpress
+
+          Wait For Line On Uart     hwclock: can't open    timeout=30
+          Wait For Line On Uart     hwclock: can't open    timeout=30
+
+  - name: STM32 button press is visible on usart2
+    type: robot
+    steps:
+      - name: Press button and verify usart2
+        script: |
+          Execute Command           mach set "stm32f103"
+          Create Terminal Tester    sysbus.usart2    machine=stm32f103
+
+          Execute Command           sysbus.gpioPortC.button Press
+          Execute Command           sysbus.gpioPortC.button Release
+
+          ${output}=    Wait For Line On Uart    Button pressed at    timeout=10
+          Should Match Regexp       ${output}[Line]    Button pressed at \\d+
+
+  - name: STM32 button output arrives on Linux ttyAMA1
+    type: robot
+    steps:
+      - name: Boot Linux
+        script: |
+          Execute Command           mach set "vexpress"
+          Create Terminal Tester    sysbus.uart0    machine=vexpress
+          Wait For Line On Uart     hwclock: can't open    timeout=30
+          Wait For Line On Uart     hwclock: can't open    timeout=30
+
+      - name: Prepare ttyAMA1
+        script: |
+          # Create /dev/ttyAMA1
+          Write Line To Uart        mkdir /sys && mount -t sysfs sysfs /sys && mdev -s && echo mdev_done
+          Wait For Line On Uart     mdev_done    timeout=15
+
+          # Open ttyAMA1 synchronously; relay its output to uart0 so the terminal tester sees it.
+          Write Line To Uart        exec 3</dev/ttyAMA1
+          Write Line To Uart        echo uart_open
+          Wait For Line On Uart     uart_open    timeout=5
+          Write Line To Uart        cat <&3 &
+
+      - name: Press button and verify arrival on ttyAMA1
+        script: |
+          # STM32 usart2 → uart_link → ttyAMA1 (fd 3) → cat → uart0
+          Execute Command           mach set "stm32f103"
+          Execute Command           sysbus.gpioPortC.button Press
+          Execute Command           sysbus.gpioPortC.button Release
+
+          Execute Command           mach set "vexpress"
+          Wait For Line On Uart     Button pressed at    timeout=15
+
+# CI pipeline — when/how the CI server runs this config.
+ci:
+  hil-sim:
+    when:
+      branch: [main, "demo/*"]
+      event: [push, manual]
+    jobs: 1
+    fail_fast: true
+    reporters: [json, junit]
+    timeout: 20m

@@ -1,0 +1,86 @@
+version: "0.1"
+renode_version: "1.16.1"
+
+# ===========================================================================
+# Zedboard (Zynq-7000) running Linux with working Ethernet, bridged to the HOST
+# via a TAP interface — so you can run an `nc` server inside the guest and reach
+# it from an `nc` client on your host machine (and vice-versa).
+#
+# Why this board (and not vexpress): the vexpress platform has no NIC. The Zynq
+# Cadence GEM (`gem0`) does, and Antmicro ships a kernel/rootfs/dtb with the GEM
+# driver + networking userland. This config is a translation of Renode's own
+# zedboard networking test (scripts/single-node/zedboard.resc +
+# tests/platforms/Zedboard.robot).
+#
+# What TAP is: a virtual Ethernet adapter on your HOST kernel. Renode plugs the
+# emulated NIC into it, so the guest looks like a real machine on a point-to-point
+# link to your host — ordinary IP/sockets then work across it.
+#
+# Requirements for the networking part:
+#   * the container needs NET_ADMIN to create the tap (rootful Docker / --cap-add
+#     NET_ADMIN); the bundled test runner does NOT grant this, so the `nc` flow is
+#     a manual step, not part of `hector test`.
+#
+# --- bring the link up (after `hector` is running) ---
+#   Host:    sudo ip addr add 192.0.2.1/24 dev tap0
+#            sudo ip link set tap0 up
+#   Guest (Renode uart0 console):
+#            ifconfig eth0 up 192.0.2.2
+#
+# Moving data — NOTE: this rootfs has `wget`, `telnet`, `tftp` but NO `nc`. So:
+#   * bidirectional stream (nc-equivalent): host listens, guest connects with telnet
+#            host>   nc -lp 9000                      # listener on the host (host HAS nc)
+#            guest>  telnet 192.0.2.1 9000            # the board is the client
+#   * file host -> guest:
+#            host>   python3 -m http.server 8000 --bind 192.0.2.1
+#            guest>  wget http://192.0.2.1:8000/file
+#   * reachability check:  guest>  ping 192.0.2.1
+# ===========================================================================
+
+arguments:
+  BIN: "https://dl.antmicro.com/projects/renode/zynq-interface-tests-vmlinux-s_14142952-ab5cd7445f31414fcbf8c79d49d737c669034ef2"
+  ROOTFS: "https://dl.antmicro.com/projects/renode/zynq--interface-tests-rootfs.ext2-s_16777216-191638e3b3832a81bebd21d555f67bf3a4d7882a"
+  DTB: "https://dl.antmicro.com/projects/renode/zynq-interface-tests-gem0.dtb-s_11724-f0dec8ffadea47891dfe2441215401f09f7242fa"
+
+machines:
+  zedboard:
+    platform:
+      - platforms/boards/zedboard.repl
+    commands: |
+      sysbus Redirect 0xC0000000 0x0 0x10000000
+      ttc0 Frequency 33333333
+      ttc1 Frequency 33333333
+      cpu SetRegister 0 0x000
+      cpu SetRegister 1 0xD32
+      cpu SetRegister 2 0x100
+      sysbus LoadELF @${BIN}
+      sysbus LoadFdt @${DTB} 0x100 "console=ttyPS0,115200 root=/dev/ram0 rw initrd=0x1a000000,16M" false
+      sysbus ZeroRange 0x1a000000 0x1600000
+      sysbus LoadBinary @${ROOTFS} 0x1a000000
+      showAnalyzer uart0
+
+# Bridge the emulated NIC (gem0) to a host TAP device named tap0. hector grants the
+# container TUN/TAP access automatically (NET_ADMIN + /dev/net/tun + root) when a tap
+# mapping is present and /dev/net/tun exists on the host; otherwise the tap is harmlessly
+# created in "dummy mode" (the boot/NIC test below still passes).
+mappings: |
+  zedboard.gem0 -> tap:tap0
+
+# This test covers the part a test can drive by itself: Linux boots and the NIC (eth0)
+# comes up. The actual guest<->host traffic (ping/telnet/wget over the tap) also needs
+# the host-side `ip addr add 192.0.2.1/24 dev tap0`, which lives on the host and can't
+# be done from inside the test — run that by hand (see the header) to exercise traffic.
+tests:
+  - name: Linux boots and the NIC comes up
+    type: robot
+    steps:
+      - name: Boot and bring up eth0
+        script: |
+          Execute Command           mach set "zedboard"
+          Create Terminal Tester    sysbus.uart0    machine=zedboard
+          Wait For Line On Uart     buildroot login:    timeout=70
+          Write Line To Uart        root
+          Wait For Prompt On Uart   \#${SPACE}
+          Write Line To Uart        ifconfig eth0 up 192.0.2.2
+          Write Line To Uart        ifconfig eth0
+          Wait For Line On Uart     192.0.2.2    timeout=10

@@ -1,0 +1,366 @@
+version: "0.1"
+renode_version: "1.16.1"
+
+# ===========================================================================
+# Blackpill board defined entirely in YAML.
+#
+# Structure: the node `blackpill` (the board / machine) groups two children —
+#   * mcu    : the complete STM32F103, a faithful translation of Renode's
+#              platforms/cpus/stm32f103.repl
+#   * button : the board's user button on PC13
+#
+# hector requires every peripheral to carry a Renode `type`, and peripheral
+# nesting is purely organizational — the generated .repl is flat, so peripheral
+# names (cpu, nvic, gpioPortC, ...) resolve regardless of nesting. The `mcu`
+# wrapper uses an inert placeholder type (a CombinedInput registered @ none: no
+# address space, no bus effect); its only job is to group the MCU peripherals.
+#
+# NOTE: `connections:` and `init:` are NODE-level keys (there is no
+# peripheral-level `connections:`), so both the MCU wiring and the board's
+# button wiring live under the `blackpill` node below.
+#
+# Hex literals are quoted so they survive YAML parsing and emit as hex in the
+# generated .repl (an unquoted 0x.. would be read as a decimal integer).
+# ===========================================================================
+
+arguments:
+  BIN: "https://dl.antmicro.com/projects/renode/zephyr-stm32f103-button.elf-s_276760-1bf32c99bbb3c01d81e13ca68118eaf08b2a815f"
+
+machines:
+  blackpill:
+    firmware: ${BIN}
+
+    peripherals:
+      # =====================================================================
+      # mcu — the complete STM32F103 (inert container; see header note)
+      # =====================================================================
+      mcu:
+        type: Miscellaneous.CombinedInput
+        at: none
+        numberOfInputs: 1
+        peripherals:
+          # ---- memory ----
+          flash:
+            type: Memory.MappedMemory
+            at: sysbus 0x00000000
+            size: "0x20000000"
+
+          sram:
+            type: Memory.MappedMemory
+            at: sysbus 0x20000000
+            size: "0x10000000"
+
+          fsmcBank1:
+            type: Memory.MappedMemory
+            at: sysbus 0x60000000
+            size: "0x10000000"
+
+          # ---- core + interrupt controller ----
+          nvic:
+            type: IRQControllers.NVIC
+            at: sysbus 0xE000E000
+            priorityMask: "0xF0"
+            systickFrequency: 72000000
+
+          cpu:
+            type: CPU.CortexM
+            at: sysbus
+            cpuType: cortex-m3
+            nvic: nvic
+
+          # ---- EXTI + NVIC input combiners ----
+          # GPIO line interrupts route through EXTI; lines 5-9 and 10-15 are
+          # OR-ed into single NVIC inputs (23, 40) via the CombinedInputs.
+          exti:
+            type: IRQControllers.STM32F4_EXTI
+            at: sysbus 0x40010400
+            numberOfOutputLines: 19
+
+          nvicInput23:
+            type: Miscellaneous.CombinedInput
+            at: none
+            numberOfInputs: 5
+
+          nvicInput40:
+            type: Miscellaneous.CombinedInput
+            at: none
+            numberOfInputs: 6
+
+          # ---- GPIO ports (STM32F1 variant) ----
+          gpioPortA:
+            type: GPIOPort.STM32F1GPIOPort
+            at: sysbus <0x40010800, +0x400>
+            invertedAFPins: [[7, 1]]
+
+          gpioPortB:
+            type: GPIOPort.STM32F1GPIOPort
+            at: sysbus <0x40010C00, +0x400>
+            invertedAFPins: [[13, 1], [14, 1], [15, 1], [0, 1], [1, 1]]
+
+          gpioPortC:
+            type: GPIOPort.STM32F1GPIOPort
+            at: sysbus <0x40011000, +0x400>
+
+          gpioPortD:
+            type: GPIOPort.STM32F1GPIOPort
+            at: sysbus <0x40011400, +0x400>
+
+          gpioPortE:
+            type: GPIOPort.STM32F1GPIOPort
+            at: sysbus <0x40011800, +0x400>
+            invertedAFPins: [[8, 1], [10, 1], [12, 1]]
+
+          gpioPortF:
+            type: GPIOPort.STM32F1GPIOPort
+            at: sysbus <0x40011C00, +0x400>
+
+          gpioPortG:
+            type: GPIOPort.STM32F1GPIOPort
+            at: sysbus <0x40012000, +0x400>
+
+          # AFIO routes GPIO pins to EXTI lines and alternate functions.
+          afio:
+            type: GPIOPort.STM32F1AFIO
+            at: sysbus 0x40010000
+            gpioPorts: [gpioPortA, gpioPortB, gpioPortC, gpioPortD, gpioPortE, gpioPortF, gpioPortG]
+
+          # ---- USARTs ----
+          usart1:
+            type: UART.STM32_UART
+            at: sysbus <0x40013800, +0x100>
+
+          usart2:
+            type: UART.STM32_UART
+            at: sysbus <0x40004400, +0x100>
+
+          usart3:
+            type: UART.STM32_UART
+            at: sysbus <0x40004800, +0x100>
+
+          usart4:
+            type: UART.STM32_UART
+            at: sysbus <0x40004C00, +0x100>
+
+          usart5:
+            type: UART.STM32_UART
+            at: sysbus <0x40005000, +0x100>
+
+          # ---- I2C ----
+          i2c1:
+            type: I2C.STM32F4_I2C
+            at: sysbus 0x40005400
+
+          i2c2:
+            type: I2C.STM32F4_I2C
+            at: sysbus 0x40005800
+
+          # ---- timers ----
+          timer1:
+            type: Timers.STM32_Timer
+            at: sysbus 0x40012c00
+            frequency: 10000000
+            initialLimit: "0xFFFF"
+
+          timer2:
+            type: Timers.STM32_Timer
+            at: sysbus 0x40000000
+            frequency: 10000000
+            initialLimit: "0xFFFF"
+
+          timer3:
+            type: Timers.STM32_Timer
+            at: sysbus 0x40000400
+            frequency: 10000000
+            initialLimit: "0xFFFF"
+
+          timer4:
+            type: Timers.STM32_Timer
+            at: sysbus 0x40000800
+            frequency: 10000000
+            initialLimit: "0xFFFF"
+
+          timer5:
+            type: Timers.STM32_Timer
+            at: sysbus 0x40000C00
+            frequency: 10000000
+            initialLimit: "0xFFFF"
+
+          timer6:
+            type: Timers.STM32_Timer
+            at: sysbus 0x40001000
+            frequency: 10000000
+            initialLimit: "0xFFFF"
+
+          timer7:
+            type: Timers.STM32_Timer
+            at: sysbus 0x40001400
+            frequency: 10000000
+            initialLimit: "0xFFFF"
+
+          timer8:
+            type: Timers.STM32_Timer
+            at: sysbus 0x40013400
+            frequency: 10000000
+            initialLimit: "0xFFFF"
+
+          timer9:
+            type: Timers.STM32_Timer
+            at: sysbus 0x40014c00
+            frequency: 10000000
+            initialLimit: "0xFFFF"
+
+          timer10:
+            type: Timers.STM32_Timer
+            at: sysbus 0x40015000
+            frequency: 10000000
+            initialLimit: "0xFFFF"
+
+          timer11:
+            type: Timers.STM32_Timer
+            at: sysbus 0x40015400
+            frequency: 10000000
+            initialLimit: "0xFFFF"
+
+          timer12:
+            type: Timers.STM32_Timer
+            at: sysbus 0x40001800
+            frequency: 10000000
+            initialLimit: "0xFFFF"
+
+          timer13:
+            type: Timers.STM32_Timer
+            at: sysbus 0x40001C00
+            frequency: 10000000
+            initialLimit: "0xFFFF"
+
+          timer14:
+            type: Timers.STM32_Timer
+            at: sysbus 0x40002000
+            frequency: 10000000
+            initialLimit: "0xFFFF"
+
+        # MCU-internal wiring, scoped to the mcu peripheral (merged into the node's
+        # wiring at build time; peripheral names are flat in the generated .repl).
+        connections: |
+          # ===== MCU internal wiring =====
+          # --- core ---
+          nvic.IRQ -> cpu@0
+
+          # --- USART interrupts ---
+          usart1 -> nvic@37
+          usart2 -> nvic@38
+          usart3 -> nvic@39
+          usart4 -> nvic@52
+          usart5 -> nvic@53
+
+          # --- I2C interrupts ---
+          i2c1.EventInterrupt -> nvic@31
+          i2c1.ErrorInterrupt -> nvic@32
+          i2c2.EventInterrupt -> nvic@33
+          i2c2.ErrorInterrupt -> nvic@34
+
+          # --- EXTI fan-out (lines 0-4 direct, 5-9 and 10-15 via combiners) ---
+          exti[0-4] -> nvic@[6-10]
+          exti[5-9] -> nvicInput23@[0-4]
+          exti[10-15] -> nvicInput40@[0-5]
+          nvicInput23 -> nvic@23
+          nvicInput40 -> nvic@40
+
+          # --- GPIO line interrupts into EXTI ---
+          gpioPortA[0-15] -> exti@[0-15]
+          gpioPortB[0-15] -> exti@[0-15]
+          gpioPortC[0-15] -> exti@[0-15]
+          gpioPortD[0-15] -> exti@[0-15]
+          gpioPortE[0-15] -> exti@[0-15]
+          gpioPortF[0-15] -> exti@[0-15]
+          gpioPortG[0-15] -> exti@[0-15]
+
+          # --- timer interrupts ---
+          timer1.BreakInterrupt -> nvic@24
+          timer1.UpdateInterrupt -> nvic@25
+          timer1.TriggerInterrupt -> nvic@26
+          timer1.CommutationInterrupt -> nvic@26
+          timer1.CaptureCompareInterrupt -> nvic@27
+          timer2 -> nvic@28
+          timer3 -> nvic@29
+          timer4 -> nvic@30
+          timer5 -> nvic@50
+          timer6 -> nvic@54
+          timer7 -> nvic@55
+          timer8.BreakInterrupt -> nvic@43
+          timer8.UpdateInterrupt -> nvic@44
+          timer8.TriggerInterrupt -> nvic@45
+          timer8.CommutationInterrupt -> nvic@45
+          timer8.CaptureCompareInterrupt -> nvic@46
+          timer9 -> nvic@24
+          timer10 -> nvic@25
+          timer11 -> nvic@26
+          timer12 -> nvic@43
+          timer13 -> nvic@44
+          timer14 -> nvic@45
+
+          # --- alternate-function routing: timer output channel -> GPIO pin ---
+          # source is the timer output channel; destination is <port>#<pin>@<timer>.
+          timer1@0 -> gpioPortA#08@01 | gpioPortE#09@01 | gpioPortB#13@01 | gpioPortA#07@01 | gpioPortE#08@01
+          timer1@1 -> gpioPortA#09@01 | gpioPortE#11@01 | gpioPortB#14@01 | gpioPortB#00@01 | gpioPortE#10@01
+          timer1@2 -> gpioPortA#10@01 | gpioPortE#13@01 | gpioPortB#15@01 | gpioPortB#01@01 | gpioPortE#12@01
+          timer1@3 -> gpioPortA#11@01 | gpioPortE#14@01
+          timer2@0 -> gpioPortA#00@02 | gpioPortA#15@02
+          timer2@1 -> gpioPortA#01@02 | gpioPortB#03@02
+          timer2@2 -> gpioPortA#02@02 | gpioPortB#10@02
+          timer2@3 -> gpioPortA#03@02 | gpioPortB#11@02
+          timer3@0 -> gpioPortA#06@03 | gpioPortB#04@03 | gpioPortC#06@03
+          timer3@1 -> gpioPortA#07@03 | gpioPortB#05@03 | gpioPortC#07@03
+          timer3@2 -> gpioPortB#00@03 | gpioPortC#08@03
+          timer3@3 -> gpioPortB#01@03 | gpioPortC#09@03
+          timer4@0 -> gpioPortB#06@04 | gpioPortD#12@04
+          timer4@1 -> gpioPortB#07@04 | gpioPortD#13@04
+          timer4@2 -> gpioPortB#08@04 | gpioPortD#14@04
+          timer4@3 -> gpioPortB#09@04 | gpioPortD#15@04
+          timer5@3 -> gpioPortA#03@05
+          timer9@0 -> gpioPortA#02@09 | gpioPortE#05@09
+          timer9@1 -> gpioPortA#03@09 | gpioPortE#06@09
+          timer10@0 -> gpioPortB#08@10 | gpioPortF#06@10
+          timer11@0 -> gpioPortB#09@11 | gpioPortF#07@11
+          timer13@0 -> gpioPortA#06@13 | gpioPortF#08@13
+          timer14@0 -> gpioPortA#07@14 | gpioPortF#09@14
+
+      # =====================================================================
+      # button — the board's user button on PC13 (sibling of mcu)
+      # =====================================================================
+      button:
+        type: Miscellaneous.Button
+        at: gpioPortC 13
+
+    connections: |
+      # ===== board wiring (button on PC13) =====
+      button -> gpioPortC@13
+
+    # sysbus-level init (ApplySVD / Tag are sysbus operations, so this stays at the
+    # node level — it can't live under the mcu peripheral).
+    init: |
+      ApplySVD @https://dl.antmicro.com/projects/renode/svd/STM32F103.svd.gz
+      Tag <0x40021000, 0x40021003> "RCC_CR" 0x0A020083
+
+    commands: |
+      showAnalyzer usart2
+
+tests:
+  - name: Button press triggers UART output
+    type: robot
+    steps:
+      - name: Press button and verify usart2
+        script: |
+          Execute Command           mach set "blackpill"
+          Create Terminal Tester    sysbus.usart2    machine=blackpill
+
+          Execute Command           sysbus.gpioPortC.button Press
+          Execute Command           sysbus.gpioPortC.button Release
+
+          ${output}=    Wait For Line On Uart    Button pressed at    timeout=5
+          Should Match Regexp       ${output}[Line]    Button pressed at \\d+
+
+when:
+  branch: [main, "release/*"]
+  event: [push, pull_request, manual]
+  path: ["cli/**"]
