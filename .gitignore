@@ -3,6 +3,7 @@
 .hector/
 .hectorci/
 results/
+dist/
 
 # Renode source / integration checkouts cloned on demand
 renode*

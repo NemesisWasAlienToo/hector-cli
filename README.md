@@ -87,6 +87,7 @@ Generated files go in `.hector/` — add it to your `.gitignore`. The Renode **b
 | Command | Behaviour |
 |---|---|
 | `hector run` | Run simulation interactively (Renode monitor) |
+| `hector run -f board.yaml` | Read a config file other than `.hector.yaml` (`-f`/`--file`; works on every command) |
 | `hector run --set BIN=fw.elf` | Override a config argument at the command line |
 | `hector run --set BIN=fw.elf --set BOARD=nucleo` | Override multiple arguments |
 | `hector run --debug boardA:3333` | Halt a CPU and open a GDB server |
@@ -117,12 +118,23 @@ Generated files go in `.hector/` — add it to your `.gitignore`. The Renode **b
 | `hector export` | Generate the files and print the run command instead of executing it |
 | `hector export --no-docker` | Print the bare `renode <resc>` command instead of the `docker run …` one |
 | `hector validate` | Validate `.hector.yaml` without running anything |
+| `hector validate -f board.yaml` | Validate a config file by another name |
 | `hector init` | Scaffold a starter `.hector.yaml` |
+| `hector init -f board.yaml` | Scaffold the starter config under a custom name |
 | `hector --version` | Print the tool version |
 
 `hector` is structured as subcommands: `run` (simulate), `test` (run the `tests:`
 section), `export` (emit the command without running it), plus `init` and
 `validate`. Run `hector <command> --help` for the flags each one accepts.
+
+Every command reads (or, for `init`, writes) `.hector.yaml` by default. Point it
+at a different file with **`-f` / `--file`** — useful when one project keeps
+several configs (e.g. `ci.hector.yaml`, `local.hector.yaml`):
+
+```bash
+hector test -f ci.hector.yaml
+hector run  --file boards/nucleo.yaml
+```
 
 ### Debug mode (`--debug NODE:PORT`)
 

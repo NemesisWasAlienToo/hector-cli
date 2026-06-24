@@ -43,8 +43,17 @@ from .validator import print_issues, validate_config
 # adding one module — no changes here.
 # ---------------------------------------------------------------------------
 
+# The config file every command reads/writes. Overridable with -f/--file; set by
+# apply_global_flags before any config is loaded.
+CONFIG_PATH = ".hector.yaml"
+
+
 def apply_global_flags(args):
-    """Honour --workspace-mount / --no-docker before anything touches paths."""
+    """Honour --file / --workspace-mount / --no-docker before anything touches paths."""
+    path = getattr(args, "file", None)
+    if path:
+        global CONFIG_PATH
+        CONFIG_PATH = path
     if getattr(args, "workspace_mount", None):
         _core.WORKSPACE_MOUNT = args.workspace_mount
     if getattr(args, "no_docker", False):
@@ -53,8 +62,8 @@ def apply_global_flags(args):
 
 
 def load_config_or_exit():
-    """Load and sanity-check ./.hector.yaml, or print an error and exit."""
-    config_path = ".hector.yaml"
+    """Load and sanity-check the config file (CONFIG_PATH), or print an error and exit."""
+    config_path = CONFIG_PATH
     if not os.path.exists(config_path):
         print(f"[ERROR] No '{config_path}' in the current directory ({os.getcwd()}).\n"
               "        Run hector from a project that has a .hector.yaml, or create one "
@@ -198,8 +207,8 @@ def snapshot_fastpath(args):
 
 
 def _run_validate():
-    """Load .hector.yaml and report all config errors, then exit."""
-    config_path = ".hector.yaml"
+    """Load the config file (CONFIG_PATH) and report all config errors, then exit."""
+    config_path = CONFIG_PATH
     if not os.path.exists(config_path):
         print(f"[VALIDATE] {config_path} not found in current directory.")
         sys.exit(1)

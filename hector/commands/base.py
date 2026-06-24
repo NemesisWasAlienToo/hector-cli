@@ -30,9 +30,19 @@ class Command:
 # Reusable flag groups (shared so each command's surface stays consistent)
 # ---------------------------------------------------------------------------
 
+def add_config_file_argument(parser):
+    """The Hector config file to read. Shared by every config-driven command
+    (run / test / export / validate) and `init` (which writes it)."""
+    parser.add_argument(
+        "-f", "--file", metavar="PATH", dest="file", default=".hector.yaml",
+        help="Path to the Hector config file (default: .hector.yaml).",
+    )
+
+
 def add_common_arguments(parser):
     """Flags shared by the config-driven commands (run / test / export): they all
     read .hector.yaml, pin a Renode version, expand the matrix, and collect output."""
+    add_config_file_argument(parser)
     parser.add_argument(
         "--set", action="append", metavar="KEY=VALUE", dest="set_args",
         help="Override a config argument. Repeatable. Takes precedence over env vars "

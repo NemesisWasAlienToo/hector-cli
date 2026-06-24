@@ -41,9 +41,9 @@ _PLATFORMS_NOTE = """\
 """
 
 
-def scaffold_init():
-    """Interactively create a starter .hector.yaml config in the current directory."""
-    target = ".hector.yaml"
+def scaffold_init(target=".hector.yaml"):
+    """Interactively create a starter config in the current directory (default
+    name .hector.yaml; override via -f/--file)."""
     if os.path.exists(target):
         print(f"[INIT] {target} already exists — not overwriting.")
         print(f"[INIT] Delete or rename it, then run 'hector init' again.")
