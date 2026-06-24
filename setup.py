@@ -18,8 +18,8 @@ def _read_readme():
 
 
 setup(
-    name="hector",
-    version="0.1.0",
+    name="hector-cli",
+    version="0.2.0",
     description="YAML-driven Renode + Verilator simulation orchestrator for embedded hardware CI",
     long_description=_read_readme(),
     long_description_content_type="text/markdown",
