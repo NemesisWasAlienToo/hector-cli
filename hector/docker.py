@@ -14,7 +14,16 @@ from .core import to_container_path
 
 
 def _xdisplay_args():
-    xauth = os.environ.get("XAUTHORITY", f"{os.environ.get('HOME')}/.Xauthority")
+    # X11 forwarding for the interactive Renode GUI — X/POSIX only. Windows has no X
+    # server or ~/.Xauthority, so emit nothing (a bogus -v mount would break the run);
+    # there, use `hector run --renode-args '--console'` for a headless monitor. Also
+    # skip if no Xauthority file can be located.
+    if os.name == "nt":
+        return []
+    xauth = os.environ.get("XAUTHORITY") or (
+        f"{os.environ['HOME']}/.Xauthority" if os.environ.get("HOME") else None)
+    if not xauth:
+        return []
     display = os.environ.get("DISPLAY", ":0")
     # Pin XAUTHORITY explicitly so X auth still resolves when the container runs as the
     # host UID (see _user_flags) rather than the image's baked-in user with HOME set.
