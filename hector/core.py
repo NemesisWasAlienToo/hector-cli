@@ -12,6 +12,7 @@ You rarely need to touch this file. The interesting, extensible parts live in:
 
 import itertools
 import os
+import posixpath
 import re
 import subprocess
 from dataclasses import dataclass, field
@@ -66,14 +67,17 @@ class Registry:
 # ==========================================================================
 # CONSTANTS
 # ==========================================================================
-TOOL_VERSION = "0.1.0"
+TOOL_VERSION = "0.2.1"
 SUPPORTED_SCHEMA_VERSIONS = {"0.1"}
 
 RENODE_REPO_URL = "https://github.com/renode/renode.git"
 INTEGRATION_REPO_URL = "https://github.com/antmicro/renode-verilator-integration.git"
 
 ARTIFACTS_DIR = ".hector"          # everything we generate/clone lives here (gitignore it)
-WORKSPACE_MOUNT = os.getcwd()      # cwd is bind-mounted at the same path inside the container
+# Path the project is bind-mounted at INSIDE the (always-Linux) container. On POSIX
+# hosts we mirror the host cwd, so paths look identical in and out; on Windows the host
+# path (C:\...) is not a valid Linux path, so use a fixed POSIX mount point and translate.
+WORKSPACE_MOUNT = "/workspace" if os.name == "nt" else os.getcwd()
 NO_DOCKER = False                  # when True, call renode/renode-test directly on host
 EXTRA_MOUNTS = []                  # dep dirs outside the workspace, bind-mounted 1:1 into every container
 LIBOPENLIBM_NAME = "libopenlibm-Linux-x86_64.a"
@@ -106,6 +110,15 @@ class RuntimeOptions:
 # ==========================================================================
 # PATH TRANSLATION  (host <-> container)
 # ==========================================================================
+def host_uid_gid():
+    """(uid, gid) of the invoking user, for `docker -u`, or None where the OS has no
+    POSIX uid (Windows). On Windows there is nothing to pass — Docker Desktop maps
+    bind-mount file ownership itself — so callers omit the flag / the chown."""
+    if hasattr(os, "getuid"):
+        return os.getuid(), os.getgid()
+    return None
+
+
 def to_container_path(host_path):
     abs_path = os.path.realpath(host_path)
     root = os.path.realpath(os.getcwd())
@@ -114,7 +127,10 @@ def to_container_path(host_path):
             f"Path '{host_path}' resolves outside the project root '{root}'. Everything used "
             f"at runtime must live under the project folder (mounted at '{WORKSPACE_MOUNT}')."
         )
-    return os.path.join(WORKSPACE_MOUNT, os.path.relpath(abs_path, root))
+    # The container is always Linux: build a POSIX path under WORKSPACE_MOUNT (this is a
+    # no-op on Linux, where WORKSPACE_MOUNT is the cwd and os.sep is already '/').
+    rel = os.path.relpath(abs_path, root).replace(os.sep, "/")
+    return posixpath.join(WORKSPACE_MOUNT, rel)
 
 
 def register_dependency_mount(host_dir):
@@ -145,9 +161,11 @@ def container_path_for(host_path):
 
 
 def container_to_host(container_path):
-    if container_path != WORKSPACE_MOUNT and not container_path.startswith(WORKSPACE_MOUNT + os.sep):
+    # WORKSPACE_MOUNT and container paths are POSIX (the container is Linux), so compare
+    # and split with '/' and posixpath, then map back onto the host's native separators.
+    if container_path != WORKSPACE_MOUNT and not container_path.startswith(WORKSPACE_MOUNT + "/"):
         raise ValueError(f"'{container_path}' is not under {WORKSPACE_MOUNT}.")
-    rel = os.path.relpath(container_path, WORKSPACE_MOUNT)
+    rel = posixpath.relpath(container_path, WORKSPACE_MOUNT).replace("/", os.sep)
     host = os.path.realpath(os.path.join(os.getcwd(), rel))
     root = os.path.realpath(os.getcwd())
     if os.path.commonpath([host, root]) != root:
@@ -156,7 +174,7 @@ def container_to_host(container_path):
 
 
 def split_host_container(path):
-    if path == WORKSPACE_MOUNT or path.startswith(WORKSPACE_MOUNT + os.sep):
+    if path == WORKSPACE_MOUNT or path.startswith(WORKSPACE_MOUNT + "/"):
         return container_to_host(path), path
     host = os.path.realpath(path)
     return host, to_container_path(host)

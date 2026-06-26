@@ -49,14 +49,18 @@ CONFIG_PATH = ".hector.yaml"
 
 
 def apply_global_flags(args):
-    """Honour --file / --workspace-mount / --no-docker before anything touches paths."""
+    """Honour --file / --workspace-mount / --no-docker before anything touches paths.
+
+    --no-docker can also be turned on with the HECTOR_NO_DOCKER env var, which is how
+    the Renode-based Docker image runs hector in-process (renode is already present
+    there, so there is nothing to launch in a sibling container)."""
     path = getattr(args, "file", None)
     if path:
         global CONFIG_PATH
         CONFIG_PATH = path
     if getattr(args, "workspace_mount", None):
         _core.WORKSPACE_MOUNT = args.workspace_mount
-    if getattr(args, "no_docker", False):
+    if getattr(args, "no_docker", False) or os.environ.get("HECTOR_NO_DOCKER"):
         _core.NO_DOCKER = True
         _core.WORKSPACE_MOUNT = os.getcwd()
 

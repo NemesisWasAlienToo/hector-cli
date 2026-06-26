@@ -14,7 +14,8 @@ import shutil
 from dataclasses import dataclass
 
 from .core import (ARTIFACTS_DIR, LIBOPENLIBM_NAME, Registry,
-                   container_path_for, split_host_container, to_container_path)
+                   container_path_for, host_uid_gid, split_host_container,
+                   to_container_path)
 from .docker import run_build
 
 MODULE_KINDS = Registry("module kind")
@@ -54,7 +55,10 @@ def build_renode_verilator(module_name, module_config, ctx):
     build_container = to_container_path(build_host)
     cmake_flags = module_config.get("cmake_flags", "")
     auto_flags = _libopenlibm_flag(ctx.integration_dir_host)
-    uid, gid = os.getuid(), os.getgid()
+    # chown the build output back to the host user (the build runs as root). No host
+    # uid on Windows → skip it; Docker Desktop maps bind-mount ownership itself.
+    _ids = host_uid_gid()
+    chown = f'chown -R {_ids[0]}:{_ids[1]} "{build_container}"\n' if _ids else ""
 
     print(f"\n[MODULE] Building '{module_name}' ({module_config['type']}) in {ctx.image}")
     print(f"         source: {source}")
@@ -67,7 +71,7 @@ def build_renode_verilator(module_name, module_config, ctx):
         f'cmake -S "{source_container}" -B "{build_container}" '
         f'-DUSER_RENODE_DIR="{ctx.renode_dir_container}" {auto_flags} {cmake_flags}\n'
         f'cmake --build "{build_container}"\n'
-        f'chown -R {uid}:{gid} "{build_container}"\n',
+        f'{chown}',
         ctx.image,
     )
 
@@ -121,7 +125,10 @@ def build_csharp(module_name, module_config, ctx):
     build_host = os.path.join(ARTIFACTS_DIR, "build", "modules", module_name)
     os.makedirs(build_host, exist_ok=True)
     build_container = to_container_path(build_host)
-    uid, gid = os.getuid(), os.getgid()
+    # chown the build output back to the host user (the build runs as root). No host
+    # uid on Windows → skip it; Docker Desktop maps bind-mount ownership itself.
+    _ids = host_uid_gid()
+    chown = f'chown -R {_ids[0]}:{_ids[1]} "{build_container}"\n' if _ids else ""
 
     print(f"\n[MODULE] Building C# '{module_name}' ({module_config['type']}) in {ctx.image}")
     print(f"         source: {source}")
@@ -137,7 +144,7 @@ def build_csharp(module_name, module_config, ctx):
         f'else\n'
         f'  echo "[ERROR] Neither dotnet nor msbuild found in container {ctx.image}"; exit 1\n'
         f'fi\n'
-        f'chown -R {uid}:{gid} "{build_container}"\n',
+        f'{chown}',
         ctx.image,
     )
 

@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Run the Renode-bundled hector image as if hector were installed locally.
+#
+#   ./hector-docker test
+#   ./hector-docker run --renode-args '--console'
+#   ./hector-docker validate -f ci.hector.yaml
+#
+# Symlink it onto your PATH to use it as `hector`:
+#   ln -s "$(pwd)/hector-docker" ~/.local/bin/hector
+#
+# It mounts your project at its real path and runs as your UID, so anything hector
+# writes (results/, generated files) stays owned by you. HOME is pointed at /tmp so
+# renode/mono have a writable home when the container runs as an arbitrary UID.
+# Override the image with HECTOR_IMAGE (default: hector-renode:latest).
+set -euo pipefail
+
+image="${HECTOR_IMAGE:-hector-cli:latest}"
+
+# Attach a TTY only when both stdin and stdout are terminals (so CI use still works).
+tty_flags=()
+[ -t 0 ] && [ -t 1 ] && tty_flags=(-it)
+
+exec docker run --rm "${tty_flags[@]}" \
+  -u "$(id -u):$(id -g)" \
+  -e HOME=/tmp \
+  -v "$PWD":"$PWD" -w "$PWD" \
+  "${image}" "$@"

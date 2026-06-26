@@ -30,8 +30,12 @@ def _user_flags():
     Placed BEFORE _runtime_flags at the renode call sites: docker honours the last
     `-u`, so a mapping that legitimately needs root (e.g. a tap device, via
     runtime.root) still wins. The module-build container (run_build) is the one
-    exception — it needs root for apt-get and chowns its artifacts back itself."""
-    return ["-u", f"{os.getuid()}:{os.getgid()}"]
+    exception — it needs root for apt-get and chowns its artifacts back itself.
+
+    No-op on Windows: there is no host uid to map, and Docker Desktop handles
+    bind-mount ownership itself."""
+    ids = core.host_uid_gid()
+    return ["-u", f"{ids[0]}:{ids[1]}"] if ids else []
 
 
 def _workspace_mount():

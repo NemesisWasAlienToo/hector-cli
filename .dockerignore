@@ -1,0 +1,28 @@
+# Keep the build context (and image layer) to just what `pip install` needs:
+# the hector package, setup.py, README/LICENSE for metadata, requirements.
+
+# VCS / tooling
+.git
+.gitignore
+.dockerignore
+Dockerfile
+hector-docker
+
+# Hector runtime / generated
+.hector/
+.hectorci/
+results/
+
+# Python build & bytecode
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+
+# Renode source / integration checkouts cloned on demand
+renode*
+
+# Not needed inside the image (mounted at run time, or dev-only)
+examples/
+main.py

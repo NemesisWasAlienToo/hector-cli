@@ -21,6 +21,7 @@ Licensed under **AGPL-3.0-or-later** — see [LICENSE](LICENSE) and
 
 - [Requirements](#requirements)
 - [Quick start](#quick-start)
+- [Run via Docker (no install)](#run-via-docker-no-install)
 - [Invocation modes](#invocation-modes)
 - [Configuration reference](#configuration-reference)
   - [Top-level fields](#top-level-fields)
@@ -79,6 +80,51 @@ hector export  # print the run command without executing it
 ```
 
 Generated files go in `.hector/` — add it to your `.gitignore`. The Renode **binary** runs from the Docker image; the Renode **source** is only cloned when a config needs it (see [Renode source checkout](#renode-source-checkout)).
+
+---
+
+## Run via Docker (no install)
+
+If you'd rather not install hector (or even Python) on the host, build the bundled
+image — it sits on top of the official Renode image, so `renode`, `renode-test`
+and `hector` are all inside one container:
+
+```bash
+cd cli
+docker build -t hector-renode .
+# match your project's renode_version:
+docker build --build-arg RENODE_VERSION=1.16.1 -t hector-renode:1.16.1 .
+```
+
+Because Renode is already in the image, hector runs **in-process**
+(`HECTOR_NO_DOCKER=1` is baked in) — no Docker socket, no sibling containers, no
+host-path matching. Use the bundled `hector-docker` wrapper, which mounts your
+project and runs as your UID so output stays yours:
+
+```bash
+./hector-docker test                       # run from your project directory
+./hector-docker validate -f ci.hector.yaml
+./hector-docker run --renode-args '--console'   # headless monitor (no GUI window)
+
+# use it like the real thing by symlinking onto your PATH:
+ln -s "$(pwd)/cli/hector-docker" ~/.local/bin/hector
+```
+
+Or the raw form (what the wrapper runs):
+
+```bash
+docker run --rm -it -u "$(id -u):$(id -g)" -e HOME=/tmp \
+  -v "$PWD":"$PWD" -w "$PWD" hector-renode test
+```
+
+Override the image tag with `HECTOR_IMAGE` (default `hector-renode:latest`).
+
+**Caveats of the in-image mode:** a `build:`/`shell` step's `image:` is ignored —
+the script runs in *this* image instead (a warning is printed), and module builds
+rely on this image's toolchain rather than a per-module one. Interactive `hector
+run` opens Renode's GUI, which needs X forwarding; pass `--renode-args '--console'`
+for a headless monitor. For full per-step image isolation (matching CI), install
+the CLI natively with `pip` and let hector launch real per-step containers.
 
 ---
 
