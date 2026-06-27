@@ -28,6 +28,7 @@ Licensed under **AGPL-3.0-or-later** — see [LICENSE](LICENSE) and
   - [arguments](#arguments)
   - [matrix](#matrix)
   - [modules](#modules)
+    - [developing your own peripherals](#developing-your-own-peripherals)
   - [hubs](#hubs)
   - [machines](#machines)
     - [peripherals](#peripherals)
@@ -653,6 +654,54 @@ modules:
 | `source` | Yes | Path to a `.csproj` directory **or** a pre-built `.dll` file. |
 
 The `type` field is what you would write in a `.repl` entry — it must match the class exposed by the compiled DLL. Multiple peripherals in the same job can share one DLL (different `type` values, same `source`); Hector emits a single `i @<path>` import even when multiple instances reference the same DLL.
+
+#### Developing your own peripherals
+
+The `modules:` block above only *wires in* a peripheral you've built — the actual
+modelling (the Verilog/C++ of a Verilated block, or the C# of a native peripheral)
+is Renode's domain, not Hector's. Hector compiles your `source:` and loads the
+result; **how** you write that source is documented by Renode and Verilator. The
+references below are where to go to design your own hardware in depth.
+
+##### Verilated (HDL) peripherals
+
+A Verilated peripheral is your RTL (Verilog / SystemVerilog) compiled by Verilator
+and bridged to Renode over a bus interface (APB / AXI-Lite / Wishbone). Hector
+builds it from the CMake project you point `source:` at, linking against the
+**renode-verilator-integration** library (`${INTEGRATION_DIR}`).
+
+- **How Renode co-simulates HDL** (the model, the bus connectors, the lifecycle) — [Renode docs: Co-simulating with an HDL simulator](https://renode.readthedocs.io/en/latest/advanced/co-simulating-with-an-hdl-simulator.html)
+- **The integration library + copy-ready CMake samples** (start from `samples/uartlite`, which the `docker-runner`/module examples mirror) — [antmicro/renode-verilator-integration](https://github.com/antmicro/renode-verilator-integration)
+- **Verilating your RTL** (the Verilator C++ API, `--cc`, the `V<top>` model) — [Verilator manual](https://verilator.org/guide/latest/)
+- **Declaring the peripheral in a platform** (the `CoSimulated*` type, its bus window) — [Renode docs: platform description format](https://renode.readthedocs.io/en/latest/advanced/platform_description_format.html)
+
+Workflow: verilate your RTL → wrap it with the integration library's bus connector
+in a CMake project → point a `renode-verilator` module's `source:` at that project
+→ reference the module from a machine's `peripherals:`.
+
+##### C# peripherals
+
+A C# peripheral is a native Renode model — full speed, with direct access to
+Renode's register / IRQ / GPIO infrastructure. Use this when you don't have (or
+don't need) RTL, e.g. a register-level model of a sensor or controller.
+
+- **Writing a peripheral from scratch** (interfaces, read/write, reset — the canonical guide) — [Renode docs: Writing your own peripheral](https://renode.readthedocs.io/en/latest/advanced/writing-peripherals.html)
+- **Register modelling helpers** (`DoubleWordRegisterCollection`, fields, value/read/write callbacks) — [Renode docs: Registers](https://renode.readthedocs.io/en/latest/advanced/registers.html)
+- **Hundreds of real models to read and adapt** — the Renode source tree under [`src/.../Emulator/Peripherals`](https://github.com/renode/renode/tree/master/src/Infrastructure/src/Emulator/Peripherals/Peripherals)
+- **Wiring the finished class into a machine** (the `.repl` entry, IRQ/GPIO connections) — [Renode docs: platform description format](https://renode.readthedocs.io/en/latest/advanced/platform_description_format.html)
+
+Workflow: implement the class (e.g. an `IDoubleWordPeripheral` with a register
+collection, plus `GPIO`/`IKnownSize`/`IGPIOReceiver` as needed) in a `.csproj` →
+point a `csharp` module's `source:` at the project (or a pre-built `.dll`) →
+reference its fully-qualified `type` from `peripherals:`.
+
+Either kind, once built, is a first-class Renode peripheral: connect it with
+[connections](#connection-syntax), bind it to host resources with [mappings](#mappings-global),
+and drive it from your [tests](#tests).
+
+> **Version note:** Renode's online docs track its latest release. If you pin an
+> older `renode_version:`, cross-check against that release's docs/tag — the
+> co-simulation bus interface and some C# APIs evolve between versions.
 
 ---
 
