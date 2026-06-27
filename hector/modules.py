@@ -94,9 +94,18 @@ _RENODE_DLL_PREFIXES = (
 
 @MODULE_KINDS.register("csharp")
 def build_csharp(module_name, module_config, ctx):
-    """Build or locate a C# Renode peripheral plugin (.dll).
-    `source` can be a pre-built .dll path or a directory containing a .csproj.
-    The DLL is loaded at emulation scope via `i @<path>`; one import covers all instances.
+    """Build or locate a C# Renode peripheral plugin.
+
+    `source` may be:
+      - a raw ``.cs`` file        → Renode compiles it at load time (its bundled Roslyn;
+                                     no .NET SDK needed). Simplest and version-matched —
+                                     what most peripherals should use.
+      - a pre-built ``.dll``      → used as-is.
+      - a directory with a ``.csproj`` → built with ``dotnet``/``msbuild`` in the
+                                     container (needs an image that ships the .NET SDK;
+                                     the stock Renode image has only the runtime).
+    The artifact is loaded at emulation scope via ``i @<path>``; one import covers all
+    instances.
     """
     if not module_config.get("type"):
         raise ValueError(f"Module '{module_name}' is missing required 'type' (the C# class name).")
@@ -105,6 +114,14 @@ def build_csharp(module_name, module_config, ctx):
         raise ValueError(f"Module '{module_name}' is missing required 'source'.")
 
     source_host, _ = split_host_container(source)
+
+    # ---- raw .cs: Renode compiles it at load time (bundled Roslyn) — no SDK, no build ----
+    if source_host.endswith(".cs"):
+        if not os.path.isfile(source_host):
+            raise FileNotFoundError(f"Module '{module_name}': source not found: {source} ({source_host})")
+        print(f"\n[MODULE] C# '{module_name}' ({module_config['type']}) — compiled by Renode at load")
+        print(f"         source: {source}")
+        return source_host
 
     # ---- pre-built DLL: use as-is ----
     if source_host.endswith(".dll"):
@@ -118,7 +135,8 @@ def build_csharp(module_name, module_config, ctx):
     if not os.path.isdir(source_host):
         raise FileNotFoundError(
             f"Module '{module_name}': source not found: {source} ({source_host})\n"
-            "  Provide either a directory containing a .csproj or a path to a pre-built .dll."
+            "  Provide a .cs file (Renode compiles it at load), a directory with a .csproj, "
+            "or a pre-built .dll."
         )
 
     source_container = to_container_path(source_host)
@@ -189,7 +207,9 @@ def build_modules(modules_cfg, ctx):
         kind = cfg.get("kind", "renode-verilator")
         builder = MODULE_KINDS.get(kind)
         artifact_host = builder(name, cfg, ctx)
-        artifact_type = "dll" if artifact_host.endswith(".dll") else "so"
+        # csharp modules (raw .cs, .csproj or pre-built .dll) load via `i @<path>`;
+        # renode-verilator modules produce a co-simulation .so.
+        artifact_type = "dll" if kind == "csharp" else "so"
         registry[name] = {
             "type": cfg.get("type"),
             "artifact_host": artifact_host,

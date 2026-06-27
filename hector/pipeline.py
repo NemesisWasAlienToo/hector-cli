@@ -113,11 +113,13 @@ def _resolve_set_overrides(args):
 
 def _needs_renode_source(config):
     """The Renode source / verilator-integration checkouts are only needed to build
-    `modules:` (they compile against Renode) or to interpolate ${RENODE_DIR} /
-    ${INTEGRATION_DIR}. The Renode binary itself comes from the Docker image, so plain
-    machines, build/shell steps and firmware URLs need neither checkout."""
-    if config.get("modules"):
-        return True
+    `renode-verilator` modules (they compile against the Renode source) or to interpolate
+    ${RENODE_DIR} / ${INTEGRATION_DIR}. The Renode binary itself comes from the Docker
+    image, so plain machines, csharp modules (compiled by Renode / built against the
+    image's assemblies), build/shell steps and firmware URLs need neither checkout."""
+    for m in (config.get("modules") or {}).values():
+        if (m.get("kind") or "renode-verilator") == "renode-verilator":
+            return True
     blob = str(config)
     return "RENODE_DIR" in blob or "INTEGRATION_DIR" in blob
 

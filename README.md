@@ -623,11 +623,21 @@ modules:
 
 #### kind: csharp
 
-Builds (or locates) a C# Renode peripheral plugin. The resulting `.dll` is loaded at emulation scope via `i @<path>` before any machine block, making the type available to all machines in the job. ([Renode docs: writing peripherals](https://renode.readthedocs.io/en/latest/advanced/writing-peripherals.html))
+A native C# Renode peripheral, loaded at emulation scope via `i @<path>` before any machine block so the type is available to every machine in the job. ([Renode docs: writing peripherals](https://renode.readthedocs.io/en/latest/advanced/writing-peripherals.html))
 
-Two usage modes:
+`source` can take three forms:
 
-**Pre-built DLL** — point `source` directly at the `.dll`:
+**Single `.cs` file (recommended)** — Renode compiles it **at load time** using its bundled C# compiler. No .NET SDK, no build step, nothing to install; the source is compiled against the running Renode's own assemblies, so it always matches the version in use. See the runnable [`csharp-peripheral`](examples/csharp-peripheral) example.
+
+```yaml
+modules:
+  my_periph:
+    kind: csharp
+    type: Antmicro.Renode.Peripherals.Miscellaneous.MyPeripheral
+    source: MyPeripheral.cs
+```
+
+**Pre-built DLL** — point `source` directly at a `.dll` (used as-is):
 
 ```yaml
 modules:
@@ -637,7 +647,7 @@ modules:
     source: prebuilt/my_periph.dll
 ```
 
-**Build from source** — point `source` at a directory containing a `.csproj`. `dotnet build` runs inside the Renode container (which ships with Mono/dotnet):
+**Build from a `.csproj`** — point `source` at a directory containing a `.csproj`; `dotnet build` (or `msbuild`) runs in the container. This needs an image that ships the **.NET SDK** *and* Renode's reference assemblies — the stock Renode image has only the runtime, so a `.cs` source is simpler unless you specifically need a pre-built binary:
 
 ```yaml
 modules:
@@ -650,10 +660,10 @@ modules:
 | Field | Required | Description |
 |---|---|---|
 | `kind` | Yes | Must be `csharp`. |
-| `type` | Yes | Fully qualified C# class name as it will appear in the generated `.repl`. |
-| `source` | Yes | Path to a `.csproj` directory **or** a pre-built `.dll` file. |
+| `type` | Yes | Fully qualified C# class name as it appears in the generated `.repl`. |
+| `source` | Yes | A `.cs` file (compiled at load), a `.csproj` directory (built in the container), **or** a pre-built `.dll`. |
 
-The `type` field is what you would write in a `.repl` entry — it must match the class exposed by the compiled DLL. Multiple peripherals in the same job can share one DLL (different `type` values, same `source`); Hector emits a single `i @<path>` import even when multiple instances reference the same DLL.
+The `type` must match the class your source exposes. Multiple peripherals in the same job can share one source (different `type` values, same `source`); Hector emits a single `i @<path>` import even when multiple instances reference it.
 
 #### Developing your own peripherals
 
@@ -691,9 +701,14 @@ don't need) RTL, e.g. a register-level model of a sensor or controller.
 - **Wiring the finished class into a machine** (the `.repl` entry, IRQ/GPIO connections) — [Renode docs: platform description format](https://renode.readthedocs.io/en/latest/advanced/platform_description_format.html)
 
 Workflow: implement the class (e.g. an `IDoubleWordPeripheral` with a register
-collection, plus `GPIO`/`IKnownSize`/`IGPIOReceiver` as needed) in a `.csproj` →
-point a `csharp` module's `source:` at the project (or a pre-built `.dll`) →
-reference its fully-qualified `type` from `peripherals:`.
+collection, plus `GPIO`/`IKnownSize`/`IGPIOReceiver` as needed) in a **single
+`.cs` file** → point a `csharp` module's `source:` at it → reference its
+fully-qualified `type` from `peripherals:`. Renode compiles the `.cs` at load
+(bundled C# compiler — no .NET SDK), so this is the simplest, version-matched
+path; the [`csharp-peripheral`](examples/csharp-peripheral) example is a complete,
+runnable starting point. Reach for a `.csproj`/`.dll` only to pre-compile a larger
+project — and note that needs a build image carrying both the .NET SDK and
+Renode's reference assemblies.
 
 Either kind, once built, is a first-class Renode peripheral: connect it with
 [connections](#connection-syntax), bind it to host resources with [mappings](#mappings-global),

@@ -1,0 +1,41 @@
+version: "0.1"
+renode_version: "1.16.1"
+
+# Custom C# peripheral, the simplest way.
+#
+# `source` points at a raw .cs file. Renode compiles it at load time using its
+# bundled C# compiler — no .NET SDK, no pre-built .dll, nothing to install. The
+# peripheral is compiled against the running Renode's own assemblies, so it always
+# matches the version in use. hector emits a single `i @HectorSample.cs` before any
+# machine is created, then references the type from the machine's peripherals.
+modules:
+  hector_sample:
+    kind: csharp
+    type: Antmicro.Renode.Peripherals.Miscellaneous.HectorSample
+    source: HectorSample.cs
+
+machines:
+  board:
+    # No platform .repl or CPU needed: the single memory-mapped peripheral below
+    # is enough to read/write its registers over the system bus.
+    peripherals:
+      sample:
+        type: hector_sample                       # references the csharp module above
+        at: "sysbus <0x40000000, +0x100>"
+
+tests:
+  - name: C# peripheral responds over the system bus
+    type: robot
+    steps:
+      - name: Read ID and round-trip the scratch register
+        script: |
+          Execute Command           mach set "board"
+
+          # ID register (0x0) is hard-coded to 0x42 by the C# model.
+          ${id}=    Execute Command    sysbus ReadDoubleWord 0x40000000
+          Should Contain            ${id}    0x00000042
+
+          # Scratch register (0x4) stores and returns whatever we write.
+          Execute Command           sysbus WriteDoubleWord 0x40000004 0xDEADBEEF
+          ${rb}=    Execute Command    sysbus ReadDoubleWord 0x40000004
+          Should Contain            ${rb}    0xDEADBEEF
