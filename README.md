@@ -20,6 +20,7 @@ Licensed under **AGPL-3.0-or-later** — see [LICENSE](LICENSE) and
 ## Contents
 
 - [Requirements](#requirements)
+- [Installation](#installation)
 - [Quick start](#quick-start)
 - [Run via Docker (no install)](#run-via-docker-no-install)
 - [Invocation modes](#invocation-modes)
@@ -53,6 +54,34 @@ Licensed under **AGPL-3.0-or-later** — see [LICENSE](LICENSE) and
 - Python 3.10+ with `pyyaml` (`pip install pyyaml`)
 - Docker (the Renode image is pulled automatically on first run)
 - Git — only needed when a config builds `modules:` or uses `${RENODE_DIR}`; the framework then clones the Renode source on first run (see [Renode source checkout](#renode-source-checkout))
+
+---
+
+## Installation
+
+Install the package to get the `hector` command on your `PATH`:
+
+```bash
+cd cli
+pip install .          # or: pip install -e .   (editable — picks up local edits)
+hector --version
+```
+
+`pip install` creates a `hector` launcher in your environment's scripts directory
+(the venv's `bin/`, or `~/.local/bin` for `pip install --user`). If `hector` isn't
+found afterwards, that scripts directory isn't on your `PATH` — add it, e.g.
+`export PATH="$HOME/.local/bin:$PATH"`.
+
+**No install?** Run the module directly from the `cli/` directory — it's equivalent:
+
+```bash
+python -m hector --version
+```
+
+> **Do not add the `cli/` source directory to your `PATH`.** The Python package is
+> named `hector/`, so a bare `hector` would resolve to that **directory** instead of
+> the command, and your shell fails with `permission denied: hector` (or
+> `command not found`). Install with `pip` (above) or use `python -m hector`.
 
 ---
 
