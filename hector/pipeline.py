@@ -162,6 +162,7 @@ def build_job_config(action, config, args, *, test_mode=False):
         live=getattr(args, "live", False),
         fail_fast=getattr(args, "fail_fast", False),
         snapshot=getattr(args, "snapshot", None),
+        no_start=getattr(args, "no_start", False),
         output_dir=getattr(args, "output", "results"),
         gather_metrics=getattr(args, "gather_execution_metrics", None),
         artifacts=artifacts_cfg,
@@ -205,7 +206,8 @@ def snapshot_fastpath(args):
     debug_config = parse_debug_flag(getattr(args, "debug", None), {}, 1, validate_nodes=False)
     snap_resc = os.path.join(resc_root, "snapshot.resc")
     with open(snap_resc, "w") as f:
-        f.write(snapshot_resc(to_container_path(args.snapshot), debug_config))
+        f.write(snapshot_resc(to_container_path(args.snapshot), debug_config,
+                              no_start=getattr(args, "no_start", False)))
     print(f"[SNAP] {args.snapshot}"
           + (f" (+GDB: {debug_config})" if debug_config else ""))
     run_renode(snap_resc, docker_image, ports=list(debug_config.values()) or None,
@@ -364,6 +366,7 @@ class JobConfig:
     live: bool = False
     fail_fast: bool = False
     snapshot: str = None
+    no_start: bool = False
     output_dir: str = "results"
     gather_metrics: list = None
     artifacts: list = field(default_factory=list)
@@ -393,7 +396,8 @@ def _resolve_active_resc(state, cfg):
         raise FileNotFoundError(f"Snapshot not found: {cfg.snapshot}")
     snap_resc = state.resc_filename.replace(".resc", "_snapshot.resc")
     with open(snap_resc, "w") as f:
-        f.write(snapshot_resc(to_container_path(cfg.snapshot), state.debug_config))
+        f.write(snapshot_resc(to_container_path(cfg.snapshot), state.debug_config,
+                              no_start=cfg.no_start))
     print(f"[SNAP] {cfg.snapshot}"
           + (f" (+GDB: {state.debug_config})" if state.debug_config else ""))
     return snap_resc
@@ -607,7 +611,7 @@ def run_job(i, total_jobs, job_context, cfg):
             generate_emulation_resc(
                 list(concrete_nodes.items()), hubs_registry, cross_connections,
                 quantum_value, debug_config, resc_filename,
-                emulation_setup=emulation_setup,
+                emulation_setup=emulation_setup, no_start=cfg.no_start,
             )
 
         # A failed build aborts before the sim/tests — but its results are still

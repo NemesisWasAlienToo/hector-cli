@@ -115,6 +115,12 @@ def add_simulation_arguments(parser):
         help="Load a Renode snapshot instead of booting from the generated resc.",
     )
     parser.add_argument(
+        "--no-start", action="store_true", dest="no_start",
+        help="Build/load the platform and drop into the Renode monitor WITHOUT issuing "
+             "'start' — the emulation stays paused so you can type 'start' yourself. "
+             "Applies to a fresh boot and to --snapshot; composes with --debug.",
+    )
+    parser.add_argument(
         "--renode-args", metavar="ARGS", dest="renode_args", default="",
         help="Extra arguments passed verbatim to Renode "
              "(e.g. --renode-args '--console --hide-log').",

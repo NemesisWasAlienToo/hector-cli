@@ -168,6 +168,7 @@ the CLI natively with `pip` and let hector launch real per-step containers.
 | `hector run --set BIN=fw.elf --set BOARD=nucleo` | Override multiple arguments |
 | `hector run --debug boardA:3333` | Halt a CPU and open a GDB server |
 | `hector run --debug boardA:3333 --debug boardB:3334` | Halt multiple CPUs on different ports |
+| `hector run --no-start` | Load the platform and drop into the monitor **paused** — type `start` yourself |
 | `hector run --renode-args '--console'` | Pass extra flags verbatim to Renode |
 | `hector run --gather-execution-metrics` | Enable Renode's CPU execution profiler for all machines |
 | `hector run --gather-execution-metrics boardA` | Enable profiler for one specific machine |
@@ -226,6 +227,22 @@ All other machines boot and run normally.
 server(s) and halts the debugged CPU(s) before resuming, so you can attach to a
 restored state. (A GDB server is a live connection, never part of saved snapshot
 state, so it is always (re)started on load.)
+
+### Manual start (`--no-start`)
+
+Every generated resc ends with a `start`, so `hector run` boots the platform
+immediately. Pass `--no-start` to omit it: hector builds/loads the platform, wires
+everything up, and drops you at the Renode monitor **paused**, so you can inspect
+state, set watchpoints, or step the setup by hand and issue `start` yourself.
+
+```bash
+hector run --no-start        # land in the monitor; type `start` when ready
+```
+
+- Applies to a fresh boot and to `--snapshot` (the restored state loads paused).
+- Composes with `--debug`: the GDB server(s) open at load, but nothing runs until
+  you `start`, so you can attach a debugger *before* the very first instruction.
+- `hector test` ignores this (tests must run); it only affects `run`/`export`.
 
 Connect with:
 ```bash

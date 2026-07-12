@@ -146,7 +146,8 @@ def finalize_commands(concrete_nodes):
 # ==========================================================================
 
 def generate_emulation_resc(renode_nodes, hubs_registry, cross_connections,
-                            quantum, debug_config, output_filename, emulation_setup=None):
+                            quantum, debug_config, output_filename, emulation_setup=None,
+                            no_start=False):
     """One resc per job: every node becomes a named machine in one emulation; hubs and
     cross-machine connectors wire them; one shared `start`.
 
@@ -155,6 +156,8 @@ def generate_emulation_resc(renode_nodes, hubs_registry, cross_connections,
     debug_config    : {node_name: gdb_port}
     emulation_setup : list of emulation-level lines to emit before machine blocks
                       (e.g. CreateServerSocketTerminal, CreateUartPtyTerminal)
+    no_start        : omit the trailing `start` so the platform loads paused and the
+                      user starts it by hand from the monitor (`hector run --no-start`)
     """
     lines = []
 
@@ -197,20 +200,26 @@ def generate_emulation_resc(renode_nodes, hubs_registry, cross_connections,
         for spec in cross_connections:
             lines.extend(HUBS.get(hubs_registry[spec["hub"]]).emit_connect(spec))
 
-    lines.append("\nstart")
+    if no_start:
+        lines.append('\necho "Platform loaded (paused). Type \'start\' to begin execution."')
+    else:
+        lines.append("\nstart")
     content = "\n".join(lines)
     with open(output_filename, "w") as f:
         f.write(content)
     return content
 
 
-def snapshot_resc(snapshot_container_path, debug_config=None):
+def snapshot_resc(snapshot_container_path, debug_config=None, no_start=False):
     """Build resc text that loads a snapshot and resumes.
 
     When debug_config ({machine_name: gdb_port}) is given, each named machine gets a
     GDB server opened and its CPU halted before the resume — so a loaded snapshot is
     debuggable just like a fresh boot. (A GDB server is a live connection, never part
     of saved snapshot state, so it must be (re)started after every Load.)
+
+    no_start omits the trailing `start`, leaving the restored state paused in the
+    monitor for the user to resume by hand (`hector run --snapshot ... --no-start`).
     """
     lines = [f"Load @{snapshot_container_path}"]
     for node_name, port in (debug_config or {}).items():
@@ -218,7 +227,10 @@ def snapshot_resc(snapshot_container_path, debug_config=None):
                   f"machine StartGdbServer {port}",
                   "cpu IsHalted true",
                   f'echo "GDB server ready for {node_name} on port {port}"']
-    lines.append("start")
+    if no_start:
+        lines.append('echo "Snapshot loaded (paused). Type \'start\' to resume."')
+    else:
+        lines.append("start")
     return "\n".join(lines) + "\n"
 
 
