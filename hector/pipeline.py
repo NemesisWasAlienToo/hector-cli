@@ -65,13 +65,30 @@ def apply_global_flags(args):
         _core.WORKSPACE_MOUNT = os.getcwd()
 
 
+def resolve_config_path(path=None):
+    """The config file to actually read, accepting either YAML extension.
+
+    `.yaml` and `.yml` are interchangeable: if the requested name isn't there but its
+    counterpart is, use that instead — so a project may keep `.hector.yml` and every
+    command still finds it. Returns the requested path unchanged when neither exists,
+    so callers report the error against the name the user asked for."""
+    path = path or CONFIG_PATH
+    if os.path.exists(path):
+        return path
+    base, ext = os.path.splitext(path)
+    counterpart = {".yaml": ".yml", ".yml": ".yaml"}.get(ext.lower())
+    if counterpart and os.path.exists(base + counterpart):
+        return base + counterpart
+    return path
+
+
 def load_config_or_exit():
     """Load and sanity-check the config file (CONFIG_PATH), or print an error and exit."""
-    config_path = CONFIG_PATH
+    config_path = resolve_config_path()
     if not os.path.exists(config_path):
         print(f"[ERROR] No '{config_path}' in the current directory ({os.getcwd()}).\n"
-              "        Run hector from a project that has a .hector.yaml, or create one "
-              "with 'hector init'.", file=sys.stderr)
+              "        Run hector from a project that has a .hector.yaml (or "
+              ".hector.yml), or create one with 'hector init'.", file=sys.stderr)
         sys.exit(1)
     try:
         config = load_yaml(config_path)
@@ -216,7 +233,7 @@ def snapshot_fastpath(args):
 
 def _run_validate():
     """Load the config file (CONFIG_PATH) and report all config errors, then exit."""
-    config_path = CONFIG_PATH
+    config_path = resolve_config_path()
     if not os.path.exists(config_path):
         print(f"[VALIDATE] {config_path} not found in current directory.")
         sys.exit(1)
@@ -576,6 +593,15 @@ def run_job(i, total_jobs, job_context, cfg):
             runtime.merge(HUBS.get(hubs_registry[spec["hub"]]).runtime_options(spec))
 
         # ---- PHASE 1.75: generate ----
+        # Inline `repl:` text becomes a real .repl on disk (Renode only loads platform
+        # descriptions from files). It lands after the user's own `platform:` files so it
+        # can extend them, and before the generated peripherals repl below.
+        for node_name, node_config in concrete_nodes.items():
+            inline_repl = node_config.get("repl")
+            if inline_repl:
+                node_config.setdefault("platform", []).append(
+                    to_container_path(gen.write_inline_repl(node_name, inline_repl, i + 1)))
+
         # Write one .repl per node, then append its path to node_config["platform"].
         for node_name, descriptor in descriptors.items():
             repl_path = gen.generate_node_repl(descriptor, i + 1)

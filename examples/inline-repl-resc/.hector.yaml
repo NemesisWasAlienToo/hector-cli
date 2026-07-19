@@ -1,0 +1,103 @@
+version: "0.1"
+renode_version: "1.16.1"
+
+# Defines an STM32F103 by pasting a platform description straight into the config.
+#
+# `repl:` and `resc:` take the *contents* of an upstream .repl / .resc verbatim, so a
+# board can be used before it ever ships in a released Renode image — copy it off
+# Renode's master branch and drop it in here. (`platform:` still takes .repl *paths*
+# for boards the image already provides.)
+
+arguments:
+  BIN: "https://dl.antmicro.com/projects/renode/zephyr-stm32f103-button.elf-s_276760-1bf32c99bbb3c01d81e13ca68118eaf08b2a815f"
+
+machines:
+  mcu:
+    firmware: ${BIN}
+
+    # Verbatim .repl platform description — exactly what you'd find in
+    # platforms/cpus/stm32f103.repl in the Renode tree.
+    repl: |
+      flash: Memory.MappedMemory @ sysbus 0x00000000
+          size: 0x20000000
+
+      sram: Memory.MappedMemory @ sysbus 0x20000000
+          size: 0x10000000
+
+      nvic: IRQControllers.NVIC @ sysbus 0xE000E000
+          priorityMask: 0xF0
+          systickFrequency: 72000000
+          IRQ -> cpu@0
+
+      cpu: CPU.CortexM @ sysbus
+          cpuType: "cortex-m3"
+          nvic: nvic
+
+      exti: IRQControllers.STM32F4_EXTI @ sysbus 0x40010400
+          numberOfOutputLines: 19
+          [0-4] -> nvic@[6-10]
+          [5-9] -> nvicInput23@[0-4]
+          [10-15] -> nvicInput40@[0-5]
+
+      nvicInput23: Miscellaneous.CombinedInput
+          numberOfInputs: 5
+          -> nvic@23
+
+      nvicInput40: Miscellaneous.CombinedInput
+          numberOfInputs: 6
+          -> nvic@40
+
+      gpioPortA: GPIOPort.STM32F1GPIOPort @ sysbus <0x40010800, +0x400>
+          [0-15] -> exti@[0-15]
+
+      gpioPortB: GPIOPort.STM32F1GPIOPort @ sysbus <0x40010C00, +0x400>
+          [0-15] -> exti@[0-15]
+
+      gpioPortC: GPIOPort.STM32F1GPIOPort @ sysbus <0x40011000, +0x400>
+          [0-15] -> exti@[0-15]
+
+      gpioPortD: GPIOPort.STM32F1GPIOPort @ sysbus <0x40011400, +0x400>
+          [0-15] -> exti@[0-15]
+
+      gpioPortE: GPIOPort.STM32F1GPIOPort @ sysbus <0x40011800, +0x400>
+          [0-15] -> exti@[0-15]
+
+      gpioPortF: GPIOPort.STM32F1GPIOPort @ sysbus <0x40011C00, +0x400>
+          [0-15] -> exti@[0-15]
+
+      gpioPortG: GPIOPort.STM32F1GPIOPort @ sysbus <0x40012000, +0x400>
+          [0-15] -> exti@[0-15]
+
+      afio: GPIOPort.STM32F1AFIO @ sysbus 0x40010000
+          gpioPorts: [gpioPortA, gpioPortB, gpioPortC, gpioPortD, gpioPortE, gpioPortF, gpioPortG]
+
+      button: Miscellaneous.Button @ gpioPortC 13
+          -> gpioPortC@13
+
+      usart2: UART.STM32_UART @ sysbus <0x40004400, +0x100>
+          -> nvic@38
+
+    # Verbatim .resc monitor script — the setup lines a board's .resc would run.
+    # Emitted after the platform + firmware load, before `commands:`.
+    # Do NOT include `mach create` here: hector already creates the machine.
+    resc: |
+      sysbus ApplySVD @https://dl.antmicro.com/projects/renode/svd/STM32F103.svd.gz
+      sysbus Tag <0x40021000, 0x40021003> "RCC_CR" 0x0A020083
+
+    commands: |
+      showAnalyzer usart2
+
+tests:
+  - name: Button press triggers UART output
+    type: robot
+    steps:
+      - name: Press button and verify usart2
+        script: |
+          Execute Command           mach set "mcu"
+          Create Terminal Tester    sysbus.usart2    machine=mcu
+
+          Execute Command           sysbus.gpioPortC.button Press
+          Execute Command           sysbus.gpioPortC.button Release
+
+          ${output}=    Wait For Line On Uart    Button pressed at    timeout=5
+          Should Match Regexp       ${output}[Line]    Button pressed at \\d+

@@ -120,6 +120,25 @@ def generate_node_repl(descriptor, job_index):
     return repl_host
 
 
+def write_inline_repl(node_name, content, job_index):
+    """Materialise a machine's inline `repl:` text as a real .repl file and return its
+    host path.
+
+    Renode only loads platform descriptions from disk, so inline text has to land in a
+    file first. This is what lets a config carry a board that isn't in the released
+    Renode image yet (e.g. one that only exists on master) — paste its .repl here
+    instead of referencing a path the image doesn't ship.
+    """
+    if isinstance(content, list):
+        content = "\n".join(content)
+    repl_root = os.path.join(ARTIFACTS_DIR, "repl")
+    os.makedirs(repl_root, exist_ok=True)
+    repl_host = os.path.join(repl_root, f"job_{job_index}_{node_name}.inline.repl")
+    with open(repl_host, "w") as f:
+        f.write(content.rstrip() + "\n")
+    return repl_host
+
+
 # ==========================================================================
 # NODE COMMAND FINALIZATION
 # ==========================================================================
@@ -175,6 +194,11 @@ def generate_emulation_resc(renode_nodes, hubs_registry, cross_connections,
         fw = node_config.get("firmware")
         if fw and fw != "none":
             lines.append(f"sysbus LoadELF @{fw}")
+        # Verbatim monitor script lifted from an upstream .resc, emitted before the
+        # user's own `commands:` (which stay the last word on this machine).
+        resc = node_config.get("resc", "")
+        if resc:
+            lines.extend(resc if isinstance(resc, list) else [resc.strip()])
         cmds = node_config.get("commands", "")
         if cmds:
             lines.extend(cmds if isinstance(cmds, list) else [cmds.strip()])

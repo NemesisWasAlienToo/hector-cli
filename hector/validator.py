@@ -40,7 +40,7 @@ _CI_WHEN_KEYS = {"branch", "event", "path"}
 _CI_TIMEOUT_RE = re.compile(r"^\d+[smh]$")
 
 _KNOWN_NODE_KEYS = {
-    "backend", "platform", "firmware",
+    "backend", "platform", "repl", "resc", "firmware",
     "peripherals", "init", "connections", "mappings", "commands",
     # deprecated at machine level (now global); kept here to emit a targeted warning
     # instead of a generic "unknown key" one.
@@ -184,6 +184,14 @@ def validate_config(config) -> Tuple[List[Issue], List[Issue]]:
         hw = node_spec.get("platform")
         if hw is not None and not isinstance(hw, list):
             err(f"{p}.platform", f"Must be a list of .repl paths, got {type(hw).__name__}.")
+        # Inline platform/script text lifted straight out of an upstream .repl/.resc
+        # (e.g. a board that only exists on Renode's master branch, not in the release).
+        for key, what in (("repl", ".repl platform description"),
+                          ("resc", ".resc monitor script")):
+            val = node_spec.get(key)
+            if val is not None and not isinstance(val, (str, list)):
+                err(f"{p}.{key}", f"Must be inline {what} text (a block scalar) or a "
+                                  f"list of lines, got {type(val).__name__}.")
         fw = node_spec.get("firmware")
         if fw is not None and not isinstance(fw, str):
             err(f"{p}.firmware", f"Must be a string path or URL, got {type(fw).__name__}.")

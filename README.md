@@ -32,6 +32,7 @@ Licensed under **AGPL-3.0-or-later** — see [LICENSE](LICENSE) and
     - [developing your own peripherals](#developing-your-own-peripherals)
   - [hubs](#hubs)
   - [machines](#machines)
+    - [inline repl and resc](#inline-repl-and-resc)
     - [peripherals](#peripherals)
     - [connections (per-machine)](#connections-per-machine)
     - [mappings](#mappings)
@@ -212,6 +213,11 @@ several configs (e.g. `ci.hector.yaml`, `local.hector.yaml`):
 hector test -f ci.hector.yaml
 hector run  --file boards/nucleo.yaml
 ```
+
+**`.yaml` and `.yml` are interchangeable.** If the requested file isn't there but its
+counterpart is, hector uses that instead — so a project may keep `.hector.yml` and
+every command still finds it with no flag, and `-f board.yaml` will pick up
+`board.yml`.
 
 ### Debug mode (`--debug NODE:PORT`)
 
@@ -851,11 +857,15 @@ machines:
     backend: renode        # optional; 'renode' is the only supported backend
     platform:
       - platforms/boards/${BOARD}.repl
+    repl: |
+      ...
     firmware: ${FW}
     peripherals: { ... }
     connections: |
       ...
     mappings: |
+      ...
+    resc: |
       ...
     commands: |
       ...
@@ -864,14 +874,68 @@ machines:
 | Field | Description |
 |---|---|
 | `backend` | Must be `renode` (default). |
-| `platform` | List of [`.repl` platform description](https://renode.readthedocs.io/en/latest/advanced/platform_description_format.html) files loaded in order. |
+| `platform` | List of [`.repl` platform description](https://renode.readthedocs.io/en/latest/advanced/platform_description_format.html) **file paths**, loaded in order. |
+| `repl` | Inline `.repl` platform description **text** (see [below](#inline-repl-and-resc)). |
 | `firmware` | ELF file loaded with [`sysbus LoadELF`](https://renode.readthedocs.io/en/latest/basic/machines.html). Omit or set to `none` to skip. |
 | `peripherals` | Peripheral instances composed onto this machine. See below. |
 | `connections` | Signal wiring scoped to this machine. Covers GPIO, IRQ, and bracket-range connections. Bare peripheral names are accepted. |
 | `mappings` | Per-machine host resource bindings. Same syntax as global `mappings:`. |
+| `resc` | Inline `.resc` monitor-script **text** (see [below](#inline-repl-and-resc)). |
 | `commands` | Raw [Renode monitor](https://renode.readthedocs.io/en/latest/basic/monitor-syntax.html) commands inserted into the resc after hardware loads. |
 
 > **Note:** `artifacts` is now a **top-level** key, not a per-machine one. See [artifacts](#artifacts).
+
+#### Inline `repl` and `resc`
+
+`platform:` takes *paths*, which only works for boards the released Renode image
+already ships. When the board you need exists only on Renode's **master** branch (or
+in your own fork), there is no path to point at — so `repl:` and `resc:` take the
+file **contents** verbatim instead:
+
+```yaml
+machines:
+  mcu:
+    repl: |                                   # a .repl pasted straight in
+      sram: Memory.MappedMemory @ sysbus 0x20000000
+          size: 0x10000000
+      cpu: CPU.CortexM @ sysbus
+          cpuType: "cortex-m3"
+          nvic: nvic
+    resc: |                                   # a .resc's setup lines
+      sysbus ApplySVD @https://.../STM32F103.svd.gz
+      sysbus Tag <0x40021000, 0x40021003> "RCC_CR" 0x0A020083
+```
+
+- **`repl:`** is written to `.hector/repl/job_<n>_<node>.inline.repl` and loaded with
+  `machine LoadPlatformDescription` (Renode only reads platform descriptions from
+  disk). It is loaded **after** any `platform:` files, so it can extend or override
+  them — list a released board under `platform:` and patch it with `repl:`.
+- **`resc:`** is emitted verbatim into that machine's block, **after** the platform
+  and firmware load and **before** `commands:`.
+
+Resulting order inside one machine:
+
+```
+mach create "<node>"
+machine LoadPlatformDescription @<platform: files>
+machine LoadPlatformDescription @<inline repl:>
+sysbus LoadELF @<firmware:>
+<resc:>
+<commands:>
+```
+
+> **Do not put `mach create` in `resc:`** — hector already creates the machine. Use
+> `resc:` for the lines that follow it (`sysbus ApplySVD`, `sysbus Tag`, macros,
+> additional `LoadPlatformDescription`, …).
+
+Both accept a block scalar or a list of lines, and both are interpolated like every
+other field. Worked examples:
+
+- [`examples/inline-repl-resc`](examples/inline-repl-resc) — the mechanics, on an
+  STM32F103 that boots real firmware.
+- [`examples/nucleo-f767zi`](examples/nucleo-f767zi) — the real motivation: a
+  **NUCLEO-F767ZI**, which Renode 1.16.1 ships no `.repl` for at all, defined inline
+  and running against the pinned release image.
 
 #### peripherals
 

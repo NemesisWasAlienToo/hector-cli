@@ -1,0 +1,228 @@
+version: "0.1"
+renode_version: "1.16.1"
+
+# ST NUCLEO-F767ZI (STM32F767ZI, Cortex-M7) defined inline.
+#
+# Renode 1.16.1 ships no nucleo_f767zi.repl and no stm32f767.repl — the closest thing
+# in the released image is platforms/cpus/stm32f746.repl. Rather than wait for a
+# release (or pin the whole project to a Renode master build), the board is pasted in
+# below as inline `repl:` text and loaded as-is.
+#
+# Bring your own firmware:
+#   hector test --set BIN=path/to/zephyr.elf
+#   hector run  --set BIN=path/to/zephyr.elf
+# The console is usart3 — on real hardware that's the ST-LINK virtual COM port
+# (PD8/PD9), which is what Zephyr's nucleo_f767zi board target uses.
+
+arguments:
+  # 'none' => no ELF is loaded; the platform still builds and can be inspected.
+  BIN: "none"
+
+machines:
+  nucleo:
+    firmware: ${BIN}
+
+    repl: |
+      // ---------------- memory (2 MB flash, 512 KB SRAM) ----------------
+      flash: Memory.MappedMemory @ sysbus 0x08000000
+          size: 0x200000
+
+      // flash is also aliased into the ITCM region on the F7
+      flash_itcm: Memory.MappedMemory @ sysbus 0x00200000
+          size: 0x200000
+
+      sram: Memory.MappedMemory @ sysbus 0x20000000
+          size: 0x80000
+
+      rom: Memory.MappedMemory @ sysbus 0x1FF00000
+          size: 0x10000
+
+      // ---------------- core ----------------
+      nvic: IRQControllers.NVIC @ sysbus 0xE000E000
+          priorityMask: 0xF0
+          systickFrequency: 216000000
+          IRQ -> cpu@0
+
+      cpu: CPU.CortexM @ sysbus
+          cpuType: "cortex-m7"
+          PerformanceInMips: 462
+          nvic: nvic
+
+      // ---------------- interrupt routing ----------------
+      exti: IRQControllers.STM32F4_EXTI @ sysbus 0x40013C00
+          numberOfOutputLines: 24
+          [0-4] -> nvic@[6-10]
+          [5-9] -> nvicInput23@[0-4]
+          [10-15] -> nvicInput40@[0-5]
+
+      nvicInput23: Miscellaneous.CombinedInput @ none
+          numberOfInputs: 5
+          -> nvic@23
+
+      nvicInput40: Miscellaneous.CombinedInput @ none
+          numberOfInputs: 6
+          -> nvic@40
+
+      syscfg: Miscellaneous.STM32_SYSCFG @ sysbus 0x40013800
+          [0-15] -> exti@[0-15]
+
+      // ---------------- USART (usart3 = ST-LINK VCP) ----------------
+      usart1: UART.STM32F7_USART @ sysbus 0x40011000
+          frequency: 216000000
+          IRQ -> nvic@37
+
+      usart2: UART.STM32F7_USART @ sysbus 0x40004400
+          frequency: 216000000
+          IRQ -> nvic@38
+
+      usart3: UART.STM32F7_USART @ sysbus 0x40004800
+          frequency: 216000000
+          IRQ -> nvic@39
+
+      usart6: UART.STM32F7_USART @ sysbus 0x40011400
+          frequency: 216000000
+          IRQ -> nvic@71
+
+      // ---------------- GPIO ----------------
+      gpioPortA: GPIOPort.STM32_GPIOPort @ sysbus <0x40020000, +0x400>
+          modeResetValue: 0xA8000000
+          pullUpPullDownResetValue: 0x64000000
+          numberOfAFs: 16
+          [0-15] -> syscfg#0@[0-15]
+
+      gpioPortB: GPIOPort.STM32_GPIOPort @ sysbus <0x40020400, +0x400>
+          modeResetValue: 0x00000280
+          outputSpeedResetValue: 0x000000C0
+          pullUpPullDownResetValue: 0x00000100
+          numberOfAFs: 16
+          [0-15] -> syscfg#1@[0-15]
+
+      gpioPortC: GPIOPort.STM32_GPIOPort @ sysbus <0x40020800, +0x400>
+          numberOfAFs: 16
+          [0-15] -> syscfg#2@[0-15]
+
+      gpioPortD: GPIOPort.STM32_GPIOPort @ sysbus <0x40020C00, +0x400>
+          numberOfAFs: 16
+          [0-15] -> syscfg#3@[0-15]
+
+      gpioPortE: GPIOPort.STM32_GPIOPort @ sysbus <0x40021000, +0x400>
+          numberOfAFs: 16
+          [0-15] -> syscfg#4@[0-15]
+
+      gpioPortF: GPIOPort.STM32_GPIOPort @ sysbus <0x40021400, +0x400>
+          numberOfAFs: 16
+          [0-15] -> syscfg#5@[0-15]
+
+      gpioPortG: GPIOPort.STM32_GPIOPort @ sysbus <0x40021800, +0x400>
+          numberOfAFs: 16
+          [0-15] -> syscfg#6@[0-15]
+
+      gpioPortH: GPIOPort.STM32_GPIOPort @ sysbus <0x40021C00, +0x400>
+          numberOfAFs: 16
+          [0-15] -> syscfg#7@[0-15]
+
+      // ---------------- board-level: user LEDs and B1 button ----------------
+      // LD1 green PB0, LD2 blue PB7, LD3 red PB14; B1 (blue) user button PC13.
+      led_green: Miscellaneous.LED @ gpioPortB 0
+      led_blue: Miscellaneous.LED @ gpioPortB 7
+      led_red: Miscellaneous.LED @ gpioPortB 14
+
+      gpioPortB:
+          0 -> led_green@0
+          7 -> led_blue@0
+          14 -> led_red@0
+
+      button_user: Miscellaneous.Button @ gpioPortC 13
+          -> gpioPortC@13
+
+      // ---------------- connectivity / timers ----------------
+      ethernet: Network.SynopsysEthernetMAC @ sysbus 0x40028000
+          -> nvic@61
+
+      rcc: Miscellaneous.STM32F4_RCC @ sysbus 0x40023800
+          rtcPeripheral: rtc
+
+      rtc: Timers.STM32F4_RTC @ sysbus 0x40002800
+          AlarmIRQ -> nvic@41
+
+      rng: Miscellaneous.STM32F4_RNG @ sysbus 0x50060800
+          -> nvic@80
+
+      i2c1: I2C.STM32F7_I2C @ sysbus 0x40005400
+          EventInterrupt -> nvic@31
+          ErrorInterrupt -> nvic@32
+
+      spi1: SPI.STM32SPI @ sysbus 0x40013000
+          IRQ -> nvic@35
+
+      dma1: DMA.STM32DMA @ sysbus 0x40026000
+          [0-7] -> nvic@[11-17,47]
+
+      dma2: DMA.STM32DMA @ sysbus 0x40026400
+          [0-7] -> nvic@[56-60,68-70]
+
+      timer1: Timers.STM32_Timer @ sysbus 0x40010000
+          BreakInterrupt -> nvic@24
+          UpdateInterrupt -> nvic@25
+          [TriggerInterrupt, CommutationInterrupt] -> nvic@[26, 26]
+          CaptureCompareInterrupt -> nvic@27
+          frequency: 10000000
+          initialLimit: 0xFFFF
+
+      timer2: Timers.STM32_Timer @ sysbus 0x40000000
+          -> nvic@28
+          frequency: 10000000
+          initialLimit: 0xFFFFFFFF
+
+      timer3: Timers.STM32_Timer @ sysbus 0x40000400
+          -> nvic@29
+          frequency: 10000000
+          initialLimit: 0xFFFF
+
+      // Registers real firmware polls during clock/power bring-up.
+      flash_regs: Memory.MappedMemory @ sysbus 0x40023C00
+          size: 0x400
+
+      pwrCr1: Python.PythonPeripheral @ sysbus 0x40007000
+          size: 0x4
+          initable: true
+          filename: "scripts/pydev/flipflop.py"
+
+      pwrCsr1: Python.PythonPeripheral @ sysbus 0x40007004
+          size: 0x4
+          initable: true
+          filename: "scripts/pydev/flipflop.py"
+
+    # Setup lines as a board .resc would run them. The F7x7 SVD isn't published, but
+    # the F7x6 one is register-compatible for everything modelled above.
+    resc: |
+      sysbus Tag <0xE0001000, 0xE0001FFF> "M7_DWT"
+      sysbus ApplySVD @https://dl.antmicro.com/projects/renode/svd/STM32F7x6.svd.gz
+
+    commands: |
+      showAnalyzer usart3
+
+tests:
+  - name: NUCLEO-F767ZI platform builds from inline repl
+    type: robot
+    steps:
+      - name: Expected peripherals are instantiated
+        script: |
+          Execute Command           mach set "nucleo"
+
+          ${p}=    Execute Command    peripherals
+          Should Contain    ${p}    usart3
+          Should Contain    ${p}    ethernet
+          Should Contain    ${p}    led_green
+          Should Contain    ${p}    button_user
+          Should Contain    ${p}    cpu
+
+      - name: Board wiring responds (B1 button and user LEDs)
+        script: |
+          Execute Command           mach set "nucleo"
+
+          ${led}=    Execute Command    sysbus.gpioPortB.led_green State
+          Should Contain    ${led}    False
+
+          Execute Command           sysbus.gpioPortC.button_user Press
+          Execute Command           sysbus.gpioPortC.button_user Release
