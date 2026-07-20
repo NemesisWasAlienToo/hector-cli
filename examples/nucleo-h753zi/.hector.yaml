@@ -1,0 +1,126 @@
+version: "0.1"
+renode_version: "1.16.1"
+
+# ST NUCLEO-H753ZI (STM32H753ZI, Cortex-M7) running Hubris.
+#
+# Unlike examples/nucleo-f767zi, this board DOES ship in the released Renode image
+# (platforms/boards/nucleo_h753zi.repl), so the platform comes from `platform:` as a
+# path. `repl:` is used only to PATCH it — the same override Renode's own
+# scripts/single-node/nucleo_h753zi_hubris.resc applies via
+# LoadPlatformDescriptionFromString.
+#
+# Hubris is the Oxide Computer Company's embedded OS. This build includes the
+# 'uartecho', 'user_leds' and 'user_button' tasks.
+
+arguments:
+  BIN: "https://dl.antmicro.com/projects/renode/hubris-stm32h753-udprpc.elf-s_131296-5caee99b2a6bb995702570dcbde1171c61225a3f"
+
+machines:
+  nucleo:
+    # Pulls in the released board definition (STM32H753 + Green/Yellow/Red LEDs,
+    # UserButton1 on PC13, Ethernet PHY) and patches it in one description.
+    #
+    # NOTE the `using` — it is load-bearing. Every LoadPlatformDescription is its own
+    # scope, so a *constructor* attribute like priorityMask can only be overridden in
+    # the same scope that creates the entry. Listing the board under `platform:` and
+    # patching from a separate `repl:` fails with:
+    #     E35: Constructor attribute within entry for variable that is not created
+    # This is exactly what Renode's own nucleo_h753zi_hubris.resc does via
+    # LoadPlatformDescriptionFromString.
+    #
+    # Hubris uses the full 8-bit priority field, so the NVIC mask is widened.
+    repl: |
+      using "platforms/boards/nucleo_h753zi.repl"
+
+      nvic:
+          priorityMask: 0xFF
+
+    firmware: ${BIN}
+
+    # The board bring-up lines from Renode's own Hubris .resc. Hubris expects its
+    # vector table at the start of flash, and polls these PWR registers during
+    # clock/power init — the tags keep it from stalling.
+    resc: |
+      cpu VectorTableOffset 0x8000000
+      sysbus Tag <0x58024800 4> "PWR_CR1_DBP_SET" 0x100
+      sysbus Tag <0x58024804 4> "PWR_CSR1" 0x2000
+      sysbus Tag <0x58024808 4> "PWR_CR2_BREN_SET" 0x1
+
+    commands: |
+      showAnalyzer usart2
+
+tests:
+  - name: Hubris boots on NUCLEO-H753ZI
+    type: robot
+    steps:
+      - name: Board peripherals are present
+        script: |
+          Execute Command           mach set "nucleo"
+
+          ${p}=    Execute Command    peripherals
+          Should Contain    ${p}    GreenLED
+          Should Contain    ${p}    YellowLED
+          Should Contain    ${p}    RedLED
+          Should Contain    ${p}    UserButton1
+          Should Contain    ${p}    usart2
+          Should Contain    ${p}    ethernet
+
+      - name: uartecho task echoes over usart2
+        script: |
+          Execute Command           mach set "nucleo"
+          Create Terminal Tester    sysbus.usart2    machine=nucleo    timeout=15
+          Start Emulation
+
+          # Proves Hubris actually scheduled and ran its 'uartecho' task —
+          # not merely that the platform constructed.
+          Write Line To Uart        HectorPing
+          ${out}=    Wait For Line On Uart    HectorPing    timeout=15
+          Log    ${out}[Line]    console=True
+
+      - name: user_leds task blinks the green LED
+        script: |
+          Execute Command           mach set "nucleo"
+
+          # Poll until the LED has been seen both on and off. Phase-independent:
+          # it proves the GPIO is actually toggling, not just sitting at a level.
+          ${saw_on}=     Set Variable    ${False}
+          ${saw_off}=    Set Variable    ${False}
+          FOR    ${i}    IN RANGE    30
+              ${s}=      Execute Command    sysbus.gpioPortB.GreenLED State
+              ${on}=     Run Keyword And Return Status    Should Contain    ${s}    True
+              ${saw_on}=     Set Variable If    ${on}        ${True}    ${saw_on}
+              ${saw_off}=    Set Variable If    not ${on}    ${True}    ${saw_off}
+              Exit For Loop If    ${saw_on} and ${saw_off}
+              Sleep    500ms
+          END
+          Should Be True    ${saw_on}     GreenLED never turned on - user_leds task not running
+          Should Be True    ${saw_off}    GreenLED never turned off - LED is not blinking
+
+      - name: user_button task toggles the yellow LED
+        script: |
+          Execute Command           mach set "nucleo"
+
+          # The yellow LED is driven only by user_button (it does not blink), so a
+          # press must flip it and a second press must flip it back.
+          ${y}=          Execute Command    sysbus.gpioPortE.YellowLED State
+          ${initial}=    Run Keyword And Return Status    Should Contain    ${y}    True
+
+          Execute Command           sysbus.gpioPortC.UserButton1 Press
+          Execute Command           sysbus.gpioPortC.UserButton1 Release
+          FOR    ${i}    IN RANGE    20
+              ${s}=     Execute Command    sysbus.gpioPortE.YellowLED State
+              ${now}=   Run Keyword And Return Status    Should Contain    ${s}    True
+              Exit For Loop If    ${now} != ${initial}
+              Sleep    500ms
+          END
+          Should Not Be Equal    ${now}    ${initial}    First press did not toggle YellowLED
+
+          Execute Command           sysbus.gpioPortC.UserButton1 Press
+          Execute Command           sysbus.gpioPortC.UserButton1 Release
+          FOR    ${i}    IN RANGE    20
+              ${s}=     Execute Command    sysbus.gpioPortE.YellowLED State
+              ${back}=  Run Keyword And Return Status    Should Contain    ${s}    True
+              Exit For Loop If    ${back} == ${initial}
+              Sleep    500ms
+          END
+          Should Be Equal    ${back}    ${initial}    Second press did not toggle YellowLED back

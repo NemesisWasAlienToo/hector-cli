@@ -908,8 +908,26 @@ machines:
 
 - **`repl:`** is written to `.hector/repl/job_<n>_<node>.inline.repl` and loaded with
   `machine LoadPlatformDescription` (Renode only reads platform descriptions from
-  disk). It is loaded **after** any `platform:` files, so it can extend or override
-  them — list a released board under `platform:` and patch it with `repl:`.
+  disk). It is loaded **after** any `platform:` files.
+
+> **Patching a bundled platform: use `using`, not `platform:`.** Every
+> `LoadPlatformDescription` is its **own description scope**, so an entry that another
+> file created is only partly reachable from `repl:` — setting a *constructor*
+> attribute on it fails with
+> `E35: Constructor attribute within entry for variable that is not created`.
+> To override one, pull the base platform into the *same* scope from inside `repl:`:
+>
+> ```yaml
+> repl: |
+>   using "platforms/boards/nucleo_h753zi.repl"
+>
+>   nvic:
+>       priorityMask: 0xFF        # works: same scope that creates `nvic`
+> ```
+>
+> This is what Renode's own scripts do with `LoadPlatformDescriptionFromString`.
+> Use `platform:` alone when you're loading a board as-is, and `using` inside `repl:`
+> when you need to patch it. See [`examples/nucleo-h753zi`](examples/nucleo-h753zi).
 - **`resc:`** is emitted verbatim into that machine's block, **after** the platform
   and firmware load and **before** `commands:`.
 
@@ -936,6 +954,8 @@ other field. Worked examples:
 - [`examples/nucleo-f767zi`](examples/nucleo-f767zi) — the real motivation: a
   **NUCLEO-F767ZI**, which Renode 1.16.1 ships no `.repl` for at all, defined inline
   and running against the pinned release image.
+- [`examples/nucleo-h753zi`](examples/nucleo-h753zi) — the other side: a board that
+  **is** shipped, loaded via `using` and *patched* inline, booting Hubris.
 
 #### peripherals
 
