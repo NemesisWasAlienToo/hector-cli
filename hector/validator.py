@@ -10,7 +10,6 @@ Usage:
     for w in warnings: print(f"  WARNING {w.path}: {w.message}")
 """
 
-import re
 from dataclasses import dataclass
 from typing import List, Tuple
 
@@ -20,24 +19,25 @@ from .mappings import MAPPING_BACKENDS
 from .modules import MODULE_KINDS
 from .runners import TEST_RUNNERS
 
+# CI trigger / run-control keys. The whole .hector.yaml is a single pipeline (there is
+# no nested `ci:` block). These belong entirely to the CI server — the CLI's run/test/
+# export never read them and it must not act on them. They are listed here only so the
+# CLI accepts them silently instead of flagging them; the CI backend is their sole
+# validator (see ci/backend/hectorci/config.py).
+_TRIGGER_TOP_KEYS = {"when", "cron", "reporters", "jobs", "fail_fast", "timeout"}
+
 # Top-level keys defined by this schema version; anything else is flagged.
 _KNOWN_TOP_KEYS = {
     "version", "renode_version", "arguments", "matrix",
     "modules", "hubs", "machines", "connections", "mappings", "build", "tests", "quantum",
-    "artifacts", "ci",
-}
+    "artifacts",
+} | _TRIGGER_TOP_KEYS
 
 # Keys renamed in this schema version → new name (for a helpful migration hint).
 _RENAMED_TOP_KEYS = {"nodes": "machines", "setup": "build", "prepare": "build"}
 
 # Test types renamed this schema version → current name (old configs still run).
 _RENAMED_TEST_TYPES = {"bash": "shell", "docker": "shell"}
-
-# CI pipeline schema (top-level `ci:` block — when/how the CI server runs this config).
-_CI_EVENTS = {"push", "pull_request", "tag", "manual", "cron"}
-_CI_PIPELINE_KEYS = {"when", "arguments", "jobs", "reporters", "fail_fast", "timeout", "cron"}
-_CI_WHEN_KEYS = {"branch", "event", "path"}
-_CI_TIMEOUT_RE = re.compile(r"^\d+[smh]$")
 
 _KNOWN_NODE_KEYS = {
     "backend", "platform", "repl", "resc", "firmware",
@@ -291,8 +291,8 @@ def validate_config(config) -> Tuple[List[Issue], List[Issue]]:
         except (TypeError, ValueError):
             err("quantum", f"Must be a positive number (seconds), got '{quantum}'.")
 
-    # ---- ci (CI pipelines) ----
-    _validate_ci(config.get("ci"), err, warn)
+    # ---- CI triggers (when/cron/…) are accepted but never validated or acted on
+    #      here; they belong to the CI server. See _TRIGGER_TOP_KEYS. ----
 
     return errors, warnings
 
@@ -326,71 +326,6 @@ def _validate_shell_steps(item, p, err, warn):
             warn(p, "No 'steps', 'script', or 'file' — it will do nothing.")
         if item.get("file") and item.get("script"):
             warn(p, "Both 'file' and 'script' — 'file' takes precedence.")
-
-
-def _validate_ci(ci_cfg, err, warn):
-    """Validate the top-level `ci:` block (pipeline-name -> CI settings)."""
-    if ci_cfg is None:
-        return
-    if not isinstance(ci_cfg, dict):
-        err("ci", f"Must be a mapping of pipeline-name: settings, got {type(ci_cfg).__name__}.")
-        return
-    for name, pipe in ci_cfg.items():
-        p = f"ci.{name}"
-        if not isinstance(pipe, dict):
-            err(p, f"Pipeline must be a mapping, got {type(pipe).__name__}."); continue
-        for k in pipe:
-            if k not in _CI_PIPELINE_KEYS:
-                warn(f"{p}.{k}", f"Unknown pipeline key '{k}'. "
-                     f"Known keys: {', '.join(sorted(_CI_PIPELINE_KEYS))}.")
-
-        # when: { branch, event, path }
-        when = pipe.get("when")
-        events = []
-        if when is not None:
-            if not isinstance(when, dict):
-                err(f"{p}.when", f"Must be a mapping, got {type(when).__name__}.")
-            else:
-                for k in when:
-                    if k not in _CI_WHEN_KEYS:
-                        warn(f"{p}.when.{k}", f"Unknown 'when' key '{k}'.")
-                raw_event = when.get("event")
-                if raw_event is None:
-                    events = []
-                elif not isinstance(raw_event, list):
-                    err(f"{p}.when.event", f"Must be a list, got {type(raw_event).__name__}.")
-                    events = []
-                else:
-                    events = raw_event
-                for ev in events:
-                    if not isinstance(ev, str) or ev not in _CI_EVENTS:
-                        err(f"{p}.when.event", f"Unknown event {ev!r}. "
-                            f"Allowed: {', '.join(sorted(_CI_EVENTS))}.")
-
-        # jobs / fail_fast
-        jobs = pipe.get("jobs")
-        if jobs is not None and (not isinstance(jobs, int) or isinstance(jobs, bool) or jobs < 1):
-            err(f"{p}.jobs", f"Must be a positive integer, got {jobs!r}.")
-        if pipe.get("fail_fast") is True and (jobs or 1) != 1:
-            err(f"{p}.fail_fast", "Only valid with jobs: 1.")
-
-        # cron (required iff event includes 'cron')
-        has_cron_event = "cron" in events
-        if has_cron_event and not isinstance(pipe.get("cron"), str):
-            err(f"{p}.cron", "A cron expression is required when event includes 'cron'.")
-        if isinstance(pipe.get("cron"), str) and not has_cron_event:
-            warn(f"{p}.cron", "cron is set but when.event does not include 'cron'.")
-
-        # timeout / reporters / arguments
-        timeout = pipe.get("timeout")
-        if timeout is not None and (not isinstance(timeout, str) or not _CI_TIMEOUT_RE.match(timeout)):
-            err(f"{p}.timeout", "Must look like '30m', '90s' or '2h'.")
-        reporters = pipe.get("reporters")
-        if reporters is not None and not isinstance(reporters, list):
-            err(f"{p}.reporters", f"Must be a list, got {type(reporters).__name__}.")
-        arguments = pipe.get("arguments")
-        if arguments is not None and not isinstance(arguments, dict):
-            err(f"{p}.arguments", f"Must be a mapping of name: value, got {type(arguments).__name__}.")
 
 
 def _validate_connection_lines(section, path, err, warn):

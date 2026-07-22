@@ -46,7 +46,7 @@ def scaffold_init(target=".hector.yaml"):
     name .hector.yaml; override via -f/--file)."""
     if os.path.exists(target):
         print(f"[INIT] {target} already exists — not overwriting.")
-        print(f"[INIT] Delete or rename it, then run 'hector init' again.")
+        print("[INIT] Delete or rename it, then run 'hector init' again.")
         sys.exit(1)
 
     print("Hector project initialisation")

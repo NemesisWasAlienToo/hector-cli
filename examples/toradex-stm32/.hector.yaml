@@ -124,13 +124,12 @@ tests:
           Execute Command           mach set "vexpress"
           Wait For Line On Uart     Button pressed at    timeout=15
 
-# CI pipeline — when/how the CI server runs this config.
-ci:
-  hil-sim:
-    when:
-      branch: [main, "demo/*"]
-      event: [push, manual]
-    jobs: 1
-    fail_fast: true
-    reporters: [json, junit]
-    timeout: 20m
+# CI triggers — when/how the CI server runs this config. The whole file is a single
+# pipeline (top-level keys), read only by the CI server; the CLI ignores them.
+when:
+  branch: [main, "demo/*"]
+  event: [push, manual]
+jobs: 1
+fail_fast: true
+reporters: [json, junit]
+timeout: 20m

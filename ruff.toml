@@ -1,0 +1,12 @@
+# Lint config for the hector CLI (standalone open-source repo). Same high-signal,
+# real-bug rules as the monorepo: F = pyflakes (undefined names, unused imports, bad
+# f-strings), E9 = syntax errors. Style/line-length nits are intentionally NOT enforced.
+line-length = 120
+target-version = "py311"
+
+[lint]
+select = ["F", "E9"]
+
+[lint.per-file-ignores]
+# Tests use fixtures that look "unused" and may redefine names across parametrizations.
+"tests/**" = ["F811"]

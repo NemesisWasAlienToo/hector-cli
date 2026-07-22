@@ -107,7 +107,7 @@ tests:
           Wait For Line On Uart     link_ok    timeout=10
 
   - name: bashing
-    type: bash
+    type: shell
     steps:
       - name: Echo test
         script: |
