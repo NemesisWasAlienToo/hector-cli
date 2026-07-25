@@ -199,11 +199,15 @@ the CLI natively with `pip` and let hector launch real per-step containers.
 | `hector validate -f board.yaml` | Validate a config file by another name |
 | `hector init` | Scaffold a starter `.hector.yaml` |
 | `hector init -f board.yaml` | Scaffold the starter config under a custom name |
+| `hector clean` | Remove generated build artifacts (`.hector/resc,repl,tests`) and `results/`; keeps the Renode cache |
+| `hector clean --all` | Also remove the cached Renode source checkouts under `.hector/` (forces a re-clone next build) |
+| `hector clean --output my-results` | Clean a custom results directory instead of `results/` |
+| `hector clean --dry-run` | Show what would be removed without deleting anything |
 | `hector --version` | Print the tool version |
 
 `hector` is structured as subcommands: `run` (simulate), `test` (run the `tests:`
-section), `export` (emit the command without running it), plus `init` and
-`validate`. Run `hector <command> --help` for the flags each one accepts.
+section), `export` (emit the command without running it), plus `init`, `validate`,
+and `clean`. Run `hector <command> --help` for the flags each one accepts.
 
 Every command reads (or, for `init`, writes) `.hector.yaml` by default. Point it
 at a different file with **`-f` / `--file`** — useful when one project keeps

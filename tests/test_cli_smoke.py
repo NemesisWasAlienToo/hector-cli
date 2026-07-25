@@ -13,10 +13,17 @@ def _parse(argv):
 def test_all_subcommands_registered():
     parser = build_parser()
     # Each known subcommand must parse and bind an executable _command.
-    for cmd in ("run", "test", "export", "validate", "init"):
+    for cmd in ("run", "test", "export", "validate", "init", "clean"):
         args = parser.parse_args([cmd])
         assert hasattr(args, "_command")
         assert args._command.name == cmd
+
+
+def test_clean_flags():
+    args = _parse(["clean", "--all", "--dry-run"])
+    assert args.all is True and args.dry_run is True
+    assert args.output == "results"
+    assert _parse(["clean", "--output", "out", "-n"]).output == "out"
 
 
 def test_unknown_subcommand_rejected():

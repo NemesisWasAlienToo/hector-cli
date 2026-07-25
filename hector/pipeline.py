@@ -257,6 +257,81 @@ def _run_validate():
 
 
 # ---------------------------------------------------------------------------
+# clean
+# ---------------------------------------------------------------------------
+
+# The Renode source / verilator-integration checkouts hector clones on demand. They
+# live under .hector/ but are expensive to re-fetch (~200 MB), so `clean` keeps them
+# unless --all is given.
+_RENODE_CHECKOUTS = ("renode", "renode-verilator-integration")
+
+
+def clean_targets(output_dir="results", include_renode=False):
+    """The generated paths `hector clean` would remove, filtered to those that exist.
+
+    Always: the cheap build artifacts (.hector/resc, .hector/repl, .hector/tests) and
+    the results/output directory. Only with include_renode: the whole .hector/ (which
+    also takes the expensive Renode checkouts with it). Paths are relative to the cwd."""
+    if include_renode:
+        targets = [ARTIFACTS_DIR, output_dir]
+    else:
+        targets = [os.path.join(ARTIFACTS_DIR, d) for d in ("resc", "repl", "tests")]
+        targets.append(output_dir)
+    # De-dupe while preserving order, keep only what's actually there.
+    seen, existing = set(), []
+    for p in targets:
+        if p not in seen and os.path.exists(p):
+            seen.add(p)
+            existing.append(p)
+    return existing
+
+
+def _is_within_cwd(path):
+    """True if `path` resolves inside the project root — the guard that stops `clean`
+    from ever deleting something outside the workspace (e.g. an absolute --output)."""
+    root = os.path.realpath(os.getcwd())
+    real = os.path.realpath(path)
+    return real == root or real.startswith(root + os.sep)
+
+
+def run_clean(output_dir="results", include_renode=False, dry_run=False):
+    """Remove hector's generated artifacts. Returns a process exit code."""
+    import shutil
+
+    targets = clean_targets(output_dir, include_renode)
+    if not targets:
+        print("[CLEAN] Nothing to remove — the workspace is already clean.")
+        return 0
+
+    removed = 0
+    for path in targets:
+        if not _is_within_cwd(path):
+            print(f"[CLEAN] SKIP {path} — outside the project directory; refusing to remove it.")
+            continue
+        kind = "dir " if os.path.isdir(path) else "file"
+        if dry_run:
+            print(f"[CLEAN] would remove {kind} {path}")
+            continue
+        if os.path.isdir(path):
+            shutil.rmtree(path, ignore_errors=True)
+        else:
+            os.remove(path)
+        print(f"[CLEAN] removed {kind} {path}")
+        removed += 1
+
+    if dry_run:
+        print("[CLEAN] dry run — nothing was deleted.")
+    elif not include_renode and os.path.isdir(ARTIFACTS_DIR):
+        # We kept a Renode checkout; tell the user how to drop it too.
+        kept = [d for d in _RENODE_CHECKOUTS
+                if os.path.isdir(os.path.join(ARTIFACTS_DIR, d))]
+        if kept:
+            print(f"[CLEAN] kept cached Renode checkout(s) in {ARTIFACTS_DIR}/ "
+                  f"({', '.join(kept)}) — use 'hector clean --all' to remove them too.")
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 

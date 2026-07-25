@@ -12,7 +12,7 @@ from ..core import TOOL_VERSION
 from .base import COMMANDS, Command, add_common_arguments, add_simulation_arguments
 
 # Importing each module runs its @COMMANDS.register(...) decorator.
-from . import run, test, export, init, validate  # noqa: E402,F401
+from . import run, test, export, init, validate, clean  # noqa: E402,F401
 
 __all__ = ["COMMANDS", "Command", "build_parser",
            "add_common_arguments", "add_simulation_arguments"]
