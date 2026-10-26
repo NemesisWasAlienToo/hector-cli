@@ -28,7 +28,7 @@ _TRIGGER_TOP_KEYS = {"when", "cron", "reporters", "jobs", "fail_fast", "timeout"
 
 # Top-level keys defined by this schema version; anything else is flagged.
 _KNOWN_TOP_KEYS = {
-    "version", "renode_version", "arguments", "matrix",
+    "version", "renode_version", "renode_image", "arguments", "matrix",
     "modules", "hubs", "machines", "connections", "mappings", "build", "tests", "quantum",
     "artifacts",
 } | _TRIGGER_TOP_KEYS
@@ -80,12 +80,16 @@ def validate_config(config) -> Tuple[List[Issue], List[Issue]]:
                  f"({', '.join(sorted(SUPPORTED_SCHEMA_VERSIONS))}). "
                  "Some fields may not be recognised.")
 
-    # ---- renode_version (required) ----
+    # ---- renode_version / renode_image (one of them required) ----
     rv = config.get("renode_version")
-    if not rv:
-        err("renode_version", "Required field missing (e.g. '1.16.1').")
-    elif not isinstance(rv, (str, int, float)):
+    ri = config.get("renode_image")
+    if not rv and not ri:
+        err("renode_version", "Required field missing (e.g. '1.16.1') — or set "
+            "'renode_image' to use a specific Docker image.")
+    if rv and not isinstance(rv, (str, int, float)):
         err("renode_version", f"Must be a string like '1.16.1', got {type(rv).__name__}.")
+    if ri and not isinstance(ri, str):
+        err("renode_image", f"Must be a string like 'my-renode:dev', got {type(ri).__name__}.")
 
     # ---- unknown / renamed top-level keys ----
     for k in config:

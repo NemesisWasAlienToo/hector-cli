@@ -11,6 +11,7 @@ Phases per job:
 
 import copy
 import os
+import re
 import shlex
 import sys
 from dataclasses import dataclass, field
@@ -106,15 +107,35 @@ def load_config_or_exit():
     return config
 
 
+_VERSION_TAG_RE = re.compile(r"^v?\d+\.\d+\.\d+$")
+
+
 def resolve_renode_image(config, args):
-    """Pin the Renode version from --renode-version or the config; return
-    (git_tag, docker_image)."""
-    renode_version = getattr(args, "renode_version", None) or config.get("renode_version")
-    if not renode_version:
-        raise ValueError("Top-level 'renode_version' is required (e.g. '1.16.1'), "
-                         "or pass --renode-version on the command line.")
-    normalized = str(renode_version).lstrip("v")
-    return f"v{normalized}", f"antmicro/renode:{normalized}"
+    """Pick the Renode Docker image and the git tag of the matching source; return
+    (git_tag, docker_image).
+
+    The image is either an explicit `renode_image` (any image, including a self-built
+    one) or `antmicro/renode:<renode_version>`. CLI flags beat the config, and a flag
+    of either kind replaces both config fields — so `--renode-version` still wins over
+    a `renode_image:` in the file. The git tag (only used to clone the Renode source)
+    comes from the version, or from the image tag when it looks like one; it is None
+    when neither tells us, and only matters if the config needs the source."""
+    flag_version = getattr(args, "renode_version", None)
+    flag_image = getattr(args, "renode_image", None)
+    if flag_version or flag_image:
+        version, image = flag_version, flag_image
+    else:
+        version, image = config.get("renode_version"), config.get("renode_image")
+    if not version and not image:
+        raise ValueError("Top-level 'renode_version' (e.g. '1.16.1') or 'renode_image' "
+                         "is required, or pass --renode-version / --renode-image on the "
+                         "command line.")
+    normalized = str(version).lstrip("v") if version else None
+    image = str(image) if image else f"antmicro/renode:{normalized}"
+    if not normalized:
+        tag = image.rsplit("/", 1)[-1].partition(":")[2]
+        normalized = tag.lstrip("v") if _VERSION_TAG_RE.match(tag) else None
+    return (f"v{normalized}" if normalized else None), image
 
 
 def _resolve_set_overrides(args):
@@ -149,6 +170,10 @@ def build_job_config(action, config, args, *, test_mode=False):
     # Clone Renode only when the config actually needs the source; otherwise skip it
     # entirely (a ~200 MB clone) and leave the framework vars empty.
     if _needs_renode_source(config):
+        if not git_tag:
+            raise ValueError(f"This config needs the Renode source, but the version of "
+                             f"'{docker_image}' can't be inferred from its tag — also set "
+                             "'renode_version' (or --renode-version) to pick the checkout.")
         renode_dir, integration_dir = prepare_dependencies(
             git_tag,
             renode_dir=getattr(args, "renode_dir", None),
@@ -210,13 +235,12 @@ def execute_jobs(cfg, args):
 
 
 def snapshot_fastpath(args):
-    """`run --snapshot --renode-version` with no .hector.yaml: write a snapshot
-    loader resc and boot it directly, skipping config/dependency machinery."""
+    """`run --snapshot --renode-version|--renode-image` with no .hector.yaml: write a
+    snapshot loader resc and boot it directly, skipping config/dependency machinery."""
     if not os.path.isfile(args.snapshot):
         print(f"[ERROR] Snapshot not found: {args.snapshot}", file=sys.stderr)
         sys.exit(1)
-    normalized = args.renode_version.lstrip("v")
-    docker_image = f"antmicro/renode:{normalized}"
+    _, docker_image = resolve_renode_image({}, args)
     resc_root = os.path.join(ARTIFACTS_DIR, "resc")
     os.makedirs(resc_root, exist_ok=True)
     # No .hector.yaml here, so debug machine names come straight from --debug.

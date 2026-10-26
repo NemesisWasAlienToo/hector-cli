@@ -175,6 +175,7 @@ the CLI natively with `pip` and let hector launch real per-step containers.
 | `hector run --gather-execution-metrics boardA` | Enable profiler for one specific machine |
 | `hector run --gather-execution-metrics boardA --gather-execution-metrics boardB` | Enable profiler for selected machines |
 | `hector run --renode-version 1.16.1` | Override the Renode version from `.hector.yaml` |
+| `hector run --renode-image my-renode:dev` | Use a specific (e.g. self-built) Renode Docker image |
 | `hector run --renode-dir /cache/renode` | Use/cache the Renode source checkout at this path (only fetched when needed) |
 | `hector run --renode-integration-dir /cache/integration` | Likewise for the verilator-integration checkout |
 | `hector run --no-docker` | Use locally installed `renode` / `renode-test` instead of Docker |
@@ -312,7 +313,7 @@ hector run --snapshot results/step_1_Linux_boots/snapshot.save
 hector test --snapshot results/step_1_Linux_boots/snapshot.save
 ```
 
-When used with `--renode-version`, no `.hector.yaml` is needed at all — useful for inspecting a snapshot outside of any project:
+When used with `--renode-version` (or `--renode-image`), no `.hector.yaml` is needed at all — useful for inspecting a snapshot outside of any project:
 
 ```bash
 hector run --snapshot /path/to/snapshot.save --renode-version 1.16.1
@@ -477,6 +478,20 @@ When combined with `--snapshot` in simulation mode, `.hector.yaml` is not requir
 hector run --snapshot path/to/snapshot.save --renode-version 1.16.1
 ```
 
+#### Using a custom Renode image (`--renode-image`)
+
+By default the image is `antmicro/renode:<renode_version>`. To use any other image — a nightly, a mirror in your registry, or one you built yourself — set `renode_image:` in `.hector.yaml` or pass `--renode-image`:
+
+```yaml
+renode_image: my-renode:dev
+```
+
+```bash
+hector test --renode-image ghcr.io/acme/renode:1.16.1-patched
+```
+
+Precedence: CLI flags beat the config, and either flag replaces *both* config fields (so `--renode-version 1.15.0` wins over a `renode_image:` in the file). If both fields are set in the config, `renode_image` is the image that runs and `renode_version` only picks the Renode source tag to clone. That tag is otherwise inferred from the image tag when it looks like a version (`…:1.16.1` / `…:v1.16.1`); if the config needs the source (see below) and it can't be inferred, also set `renode_version`.
+
 #### Renode source checkout
 
 Running a simulation does **not** need the Renode source — the binary and its bundled platforms come from the `antmicro/renode` Docker image. Hector clones the Renode source (and the verilator-integration repo) into `.hector/` **only when a config actually needs it**:
@@ -574,7 +589,8 @@ The configuration lives in `.hector.yaml`.
 | Field | Required | Description |
 |---|---|---|
 | `version` | No | Schema version (currently `"0.1"`). Warns if unrecognised. |
-| `renode_version` | Yes | Renode version, no leading `v` (e.g. `1.16.1`). Selects both the git tag for cloning and the Docker image tag. |
+| `renode_version` | Yes¹ | Renode version, no leading `v` (e.g. `1.16.1`). Selects both the git tag for cloning and the Docker image tag. |
+| `renode_image` | Yes¹ | Full Renode Docker image to use instead of `antmicro/renode:<renode_version>` (e.g. a self-built `my-renode:dev`). See [custom Renode image](#using-a-custom-renode-image---renode-image). |
 | `arguments` | No | Scalar defaults, overridable by env var or `--set`. |
 | `build` | No | Pre-sim shell steps run once per job in containers (compile firmware, fetch/generate files, …). Interpolated with the job's arguments/matrix variables. |
 | `matrix` | No | Cross-product job expansion. |
@@ -586,6 +602,8 @@ The configuration lives in `.hector.yaml`.
 | `tests` | No | Test steps run by `hector test`. |
 | `quantum` | No | Override the global time quantum (seconds). |
 | `ci` | No | CI pipeline definitions: when and how a CI server runs this config. |
+
+¹ At least one of `renode_version` / `renode_image` is required (or the matching CLI flag).
 
 ---
 

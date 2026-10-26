@@ -17,8 +17,8 @@ class RunCommand(Command):
     def execute(self, args):
         pipeline.apply_global_flags(args)
 
-        # Convenience fast path: a snapshot + pinned version needs no .hector.yaml.
-        if args.snapshot and args.renode_version:
+        # Convenience fast path: a snapshot + pinned version/image needs no .hector.yaml.
+        if args.snapshot and (args.renode_version or args.renode_image):
             pipeline.snapshot_fastpath(args)
             return 0
 

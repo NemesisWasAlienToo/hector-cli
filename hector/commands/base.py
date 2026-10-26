@@ -54,6 +54,12 @@ def add_common_arguments(parser):
              ".hector.yaml.",
     )
     parser.add_argument(
+        "--renode-image", metavar="IMAGE", dest="renode_image",
+        help="Renode Docker image to use instead of antmicro/renode:<version> (any "
+             "image, e.g. a self-built one: my-renode:dev). Overrides renode_image / "
+             "renode_version from .hector.yaml.",
+    )
+    parser.add_argument(
         "--renode-dir", metavar="PATH", dest="renode_dir", default=None,
         help="Location of the Renode source checkout (only fetched when a config builds "
              "'modules:' or uses ${RENODE_DIR}). Reused if it exists, cloned there if "
