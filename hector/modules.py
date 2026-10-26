@@ -14,7 +14,7 @@ import shutil
 from dataclasses import dataclass
 
 from .core import (ARTIFACTS_DIR, LIBOPENLIBM_NAME, Registry,
-                   container_path_for, host_uid_gid, split_host_container,
+                   container_path_for, from_config, host_uid_gid, split_host_container,
                    to_container_path)
 from .docker import run_build
 
@@ -46,7 +46,7 @@ def build_renode_verilator(module_name, module_config, ctx):
     if not source:
         raise ValueError(f"Module '{module_name}' is missing required 'source'.")
 
-    source_host, source_container = split_host_container(source)
+    source_host, source_container = split_host_container(from_config(source))
     if not os.path.isdir(source_host):
         raise FileNotFoundError(f"Module '{module_name}': source dir not found: {source} ({source_host})")
 
@@ -113,7 +113,7 @@ def build_csharp(module_name, module_config, ctx):
     if not source:
         raise ValueError(f"Module '{module_name}' is missing required 'source'.")
 
-    source_host, _ = split_host_container(source)
+    source_host, _ = split_host_container(from_config(source))
 
     # ---- raw .cs: Renode compiles it at load time (bundled Roslyn) — no SDK, no build ----
     if source_host.endswith(".cs"):

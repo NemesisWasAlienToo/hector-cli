@@ -262,7 +262,7 @@ def snapshot_resc(snapshot_container_path, debug_config=None, no_start=False):
 # ARTIFACT COLLECTION
 # ==========================================================================
 
-def collect_artifacts(patterns, output_dir, job_index=None):
+def collect_artifacts(patterns, output_dir, job_index=None, base_dir="."):
     """Sweep the global artifact glob patterns and copy matches into
     <output_dir>/artifacts/ so a single directory can be uploaded by CI / read by a
     dashboard.
@@ -270,6 +270,8 @@ def collect_artifacts(patterns, output_dir, job_index=None):
     patterns   : list of glob strings (top-level 'artifacts:' or --artifacts override)
     output_dir : the run output directory (--output)
     job_index  : 1-based job number; prefixes copied filenames to avoid cross-job clashes
+    base_dir   : directory relative patterns resolve against (the config's directory
+                 for 'artifacts:', the cwd for --artifacts)
 
     Returns the list of collected destination paths (relative to cwd).
     """
@@ -283,7 +285,7 @@ def collect_artifacts(patterns, output_dir, job_index=None):
     collected, seen = [], set()
     header_shown = False
     for pattern in patterns:
-        for src in sorted(_match_artifacts(pattern, dest_root)):
+        for src in sorted(_match_artifacts(pattern, dest_root, base_dir)):
             real = os.path.realpath(src)
             if real in seen or not os.path.isfile(real):
                 continue
@@ -308,19 +310,19 @@ def collect_artifacts(patterns, output_dir, job_index=None):
     return collected
 
 
-def _match_artifacts(pattern, dest_root):
-    """Resolve one artifact glob pattern to a list of host paths.
+def _match_artifacts(pattern, dest_root, base_dir="."):
+    """Resolve one artifact glob pattern (relative to base_dir) to a list of host paths.
 
-    A bare filename pattern (no '/', e.g. '*.xml') searches the whole project tree
+    A bare filename pattern (no '/', e.g. '*.xml') searches the whole base_dir tree
     recursively, pruning hidden dirs (.hector, .git, …) and the artifacts output dir —
     so 'results/junit.xml' is found without sweeping the bundled Renode clone.
     A pattern with a path component ('results/*.bin', 'logs/**/*.log') is passed to
     glob as-is, so explicit directories and '**' behave normally.
     """
     if "/" in pattern or os.sep in pattern:
-        return glob.glob(pattern, recursive=True)
+        return glob.glob(os.path.join(base_dir, pattern), recursive=True)
     matches = []
-    for root, dirs, files in os.walk("."):
+    for root, dirs, files in os.walk(base_dir):
         dirs[:] = [d for d in dirs
                    if not d.startswith(".")
                    and os.path.realpath(os.path.join(root, d)) != dest_root]

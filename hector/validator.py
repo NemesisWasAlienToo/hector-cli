@@ -28,7 +28,7 @@ _TRIGGER_TOP_KEYS = {"when", "cron", "reporters", "jobs", "fail_fast", "timeout"
 
 # Top-level keys defined by this schema version; anything else is flagged.
 _KNOWN_TOP_KEYS = {
-    "version", "renode_version", "renode_image", "arguments", "matrix",
+    "version", "renode_version", "renode_image", "docker_args", "arguments", "matrix",
     "modules", "hubs", "machines", "connections", "mappings", "build", "tests", "quantum",
     "artifacts",
 } | _TRIGGER_TOP_KEYS
@@ -90,6 +90,13 @@ def validate_config(config) -> Tuple[List[Issue], List[Issue]]:
         err("renode_version", f"Must be a string like '1.16.1', got {type(rv).__name__}.")
     if ri and not isinstance(ri, str):
         err("renode_image", f"Must be a string like 'my-renode:dev', got {type(ri).__name__}.")
+
+    # ---- docker_args ----
+    da = config.get("docker_args")
+    if da is not None and not (isinstance(da, str) or
+                               (isinstance(da, list) and all(isinstance(x, str) for x in da))):
+        err("docker_args", "Must be a string or a list of strings "
+            "(e.g. ['-v /opt/tools:/opt/tools', '-e FOO=1']).")
 
     # ---- unknown / renamed top-level keys ----
     for k in config:

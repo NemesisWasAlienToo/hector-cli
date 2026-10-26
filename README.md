@@ -176,6 +176,7 @@ the CLI natively with `pip` and let hector launch real per-step containers.
 | `hector run --gather-execution-metrics boardA --gather-execution-metrics boardB` | Enable profiler for selected machines |
 | `hector run --renode-version 1.16.1` | Override the Renode version from `.hector.yaml` |
 | `hector run --renode-image my-renode:dev` | Use a specific (e.g. self-built) Renode Docker image |
+| `hector run --docker-args '-v /opt/tools:/opt/tools'` | Add extra flags (mounts, env, …) to every `docker run` |
 | `hector run --renode-dir /cache/renode` | Use/cache the Renode source checkout at this path (only fetched when needed) |
 | `hector run --renode-integration-dir /cache/integration` | Likewise for the verilator-integration checkout |
 | `hector run --no-docker` | Use locally installed `renode` / `renode-test` instead of Docker |
@@ -452,6 +453,32 @@ hector run --renode-args '--console'
 hector run --renode-args '--hide-log --config my.conf'
 ```
 
+#### Paths and working directory
+
+Everything a hectorfile executes — `build:` steps, `shell` tests, Renode and `renode-test` — runs **in the hectorfile's folder**, and paths written in the file (`firmware:`, `platform:`, module `source:`, test `file:` / `snapshot:`, `file:` mappings, `artifacts:`, paths inside scripts and `commands:`) are **relative to that folder**. So `hector test -f boards/nucleo/.hector.yaml` behaves the same as running `hector test` inside `boards/nucleo/`.
+
+The directory you run hector from is mounted into the container (at the same path), and the container's working directory (`-w`) is the hectorfile's folder. If the hectorfile lives **outside** the directory you run from (`hector test -f ../other/.hector.yaml`), its folder is mounted as well, at its own path. A path like `../shared/board.repl` works as long as it lands inside one of those mounts — for anything else, add a mount with [`docker_args`](#extra-docker-flags---docker-args). Under `--no-docker` the processes simply run with the hectorfile's folder as their cwd.
+
+Paths given on the **command line** (`--output`, `--snapshot`, `--test-file`, `--artifacts`, `--renode-dir`, …) stay relative to where you run hector, and `.hector/` is still created there.
+
+#### Extra Docker flags (`--docker-args`)
+
+Add your own flags to every `docker run` hector starts — Renode, robot tests, `shell` tests, `build:` steps and module builds — e.g. to mount more directories or set environment variables. Declare them in `.hector.yaml` as a string or a list:
+
+```yaml
+docker_args:
+  - -v /opt/toolchains:/opt/toolchains:ro
+  - -e LICENSE_SERVER=10.0.0.5
+```
+
+or pass them on the command line, where they are **appended** to the config's:
+
+```bash
+hector test --docker-args '-v /data/firmware:/data/firmware'
+```
+
+Use absolute host paths for `-v` (Docker treats a bare name as a named volume). Ignored under `--no-docker`.
+
 #### Container networking
 
 Every container hector starts — the Renode emulation (`run`), robot tests, `shell` tests, `build:` steps and module builds — runs with `--net=host`. GDB servers (`--debug`), `tcp:` mappings and anything a step listens on are reachable from the host on the same port, and steps can reach host services on `localhost`. No port publishing is involved.
@@ -595,6 +622,7 @@ The configuration lives in `.hector.yaml`.
 | `version` | No | Schema version (currently `"0.1"`). Warns if unrecognised. |
 | `renode_version` | Yes¹ | Renode version, no leading `v` (e.g. `1.16.1`). Selects both the git tag for cloning and the Docker image tag. |
 | `renode_image` | Yes¹ | Full Renode Docker image to use instead of `antmicro/renode:<renode_version>` (e.g. a self-built `my-renode:dev`). See [custom Renode image](#using-a-custom-renode-image---renode-image). |
+| `docker_args` | No | Extra `docker run` flags (string or list) for every container, e.g. more `-v` mounts. See [extra Docker flags](#extra-docker-flags---docker-args). |
 | `arguments` | No | Scalar defaults, overridable by env var or `--set`. |
 | `build` | No | Pre-sim shell steps run once per job in containers (compile firmware, fetch/generate files, …). Interpolated with the job's arguments/matrix variables. |
 | `matrix` | No | Cross-product job expansion. |

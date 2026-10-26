@@ -67,7 +67,7 @@ class Registry:
 # ==========================================================================
 # CONSTANTS
 # ==========================================================================
-TOOL_VERSION = "0.5.0"
+TOOL_VERSION = "0.6.0"
 SUPPORTED_SCHEMA_VERSIONS = {"0.1"}
 
 RENODE_REPO_URL = "https://github.com/renode/renode.git"
@@ -80,6 +80,11 @@ ARTIFACTS_DIR = ".hector"          # everything we generate/clone lives here (gi
 WORKSPACE_MOUNT = "/workspace" if os.name == "nt" else os.getcwd()
 NO_DOCKER = False                  # when True, call renode/renode-test directly on host
 EXTRA_MOUNTS = []                  # dep dirs outside the workspace, bind-mounted 1:1 into every container
+DOCKER_ARGS = []                   # user flags (docker_args: + --docker-args) added to every `docker run`
+# Host directory of the config file being executed. Paths written in the config resolve
+# against it, and scripts / Renode run with it as their working directory. None = cwd
+# (no config loaded, e.g. `run --snapshot` without one).
+CONFIG_DIR = None
 LIBOPENLIBM_NAME = "libopenlibm-Linux-x86_64.a"
 
 DEFAULT_QUANTUM = "0.00001"        # 10 us; applied when any hub is present
@@ -123,6 +128,11 @@ def to_container_path(host_path):
     abs_path = os.path.realpath(host_path)
     root = os.path.realpath(os.getcwd())
     if os.path.commonpath([abs_path, root]) != root:
+        # Out-of-tree dirs registered in EXTRA_MOUNTS (the config's dir, a shared
+        # Renode cache) are mounted 1:1, so their paths are valid as-is.
+        for m in EXTRA_MOUNTS:
+            if os.path.commonpath([abs_path, m]) == m:
+                return abs_path
         raise ValueError(
             f"Path '{host_path}' resolves outside the project root '{root}'. Everything used "
             f"at runtime must live under the project folder (mounted at '{WORKSPACE_MOUNT}')."
@@ -130,7 +140,7 @@ def to_container_path(host_path):
     # The container is always Linux: build a POSIX path under WORKSPACE_MOUNT (this is a
     # no-op on Linux, where WORKSPACE_MOUNT is the cwd and os.sep is already '/').
     rel = os.path.relpath(abs_path, root).replace(os.sep, "/")
-    return posixpath.join(WORKSPACE_MOUNT, rel)
+    return WORKSPACE_MOUNT if rel == "." else posixpath.join(WORKSPACE_MOUNT, rel)
 
 
 def register_dependency_mount(host_dir):
@@ -171,6 +181,27 @@ def container_to_host(container_path):
     if os.path.commonpath([host, root]) != root:
         raise ValueError(f"'{container_path}' maps outside the project root.")
     return host
+
+
+def config_dir():
+    """Host directory config-relative paths resolve against (see CONFIG_DIR)."""
+    return CONFIG_DIR or os.getcwd()
+
+
+def from_config(path):
+    """Resolve a path written in the config against the config file's directory.
+    Absolute paths (host or container, e.g. an interpolated ${RENODE_DIR}) and URLs
+    are returned unchanged."""
+    if not path or os.path.isabs(path) or path.startswith("/") or "://" in path:
+        return path
+    return os.path.normpath(os.path.join(config_dir(), path))
+
+
+def execution_dir():
+    """Working directory for everything hector executes (build/shell steps, Renode,
+    renode-test): the config's directory — as a container path under Docker, a host
+    path under --no-docker."""
+    return config_dir() if NO_DOCKER else to_container_path(config_dir())
 
 
 def split_host_container(path):

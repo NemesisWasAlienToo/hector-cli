@@ -60,6 +60,12 @@ def add_common_arguments(parser):
              "renode_version from .hector.yaml.",
     )
     parser.add_argument(
+        "--docker-args", metavar="ARGS", dest="docker_args", default="",
+        help="Extra flags added to every `docker run` hector starts, e.g. more mounts "
+             "(--docker-args '-v /opt/tools:/opt/tools -e FOO=1'). Appended to "
+             "docker_args from .hector.yaml.",
+    )
+    parser.add_argument(
         "--renode-dir", metavar="PATH", dest="renode_dir", default=None,
         help="Location of the Renode source checkout (only fetched when a config builds "
              "'modules:' or uses ${RENODE_DIR}). Reused if it exists, cloned there if "

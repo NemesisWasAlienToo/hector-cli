@@ -14,6 +14,8 @@ def clean_env(monkeypatch, tmp_path):
     monkeypatch.setattr(core, "WORKSPACE_MOUNT", str(tmp_path))
     monkeypatch.setattr(core, "EXTRA_MOUNTS", [])
     monkeypatch.setattr(core, "NO_DOCKER", False)
+    monkeypatch.setattr(core, "CONFIG_DIR", None)
+    monkeypatch.setattr(core, "DOCKER_ARGS", [])
     # Neutralise X11 forwarding so argv is deterministic across hosts.
     monkeypatch.delenv("XAUTHORITY", raising=False)
     monkeypatch.delenv("HOME", raising=False)
@@ -21,20 +23,71 @@ def clean_env(monkeypatch, tmp_path):
 
 # ---- build_renode_argv ----
 
-def test_no_docker_is_bare_renode(monkeypatch):
+def test_no_docker_is_bare_renode(monkeypatch, tmp_path):
     monkeypatch.setattr(core, "NO_DOCKER", True)
+    # Absolute: renode runs in the config's directory, not the cwd.
     assert docker.build_renode_argv("job.resc", "img", extra_args=["--console"]) == [
-        "renode", "job.resc", "--console"]
+        "renode", str(tmp_path / "job.resc"), "--console"]
 
 
-def test_docker_argv_core_tokens():
+def test_docker_argv_core_tokens(tmp_path):
     argv = docker.build_renode_argv("job.resc", "antmicro/renode:1.16.1")
     assert argv[:3] == ["docker", "run", "-it"]
     assert "--net=host" in argv
     assert "antmicro/renode:1.16.1" in argv
     # The image must be immediately followed by the renode invocation.
     i = argv.index("antmicro/renode:1.16.1")
-    assert argv[i + 1:i + 3] == ["renode", "job.resc"]
+    assert argv[i + 1:i + 3] == ["renode", str(tmp_path / "job.resc")]
+
+
+def test_workdir_is_cwd_without_config(tmp_path):
+    argv = docker.build_renode_argv("j.resc", "img")
+    assert argv[argv.index("-w") + 1] == str(tmp_path)
+
+
+def test_workdir_is_config_dir_mount_unchanged(monkeypatch, tmp_path):
+    (tmp_path / "sub").mkdir()
+    monkeypatch.setattr(core, "CONFIG_DIR", str(tmp_path / "sub"))
+    argv = docker.build_renode_argv("j.resc", "img")
+    assert argv[argv.index("-v") + 1] == f"{tmp_path}:{tmp_path}"
+    assert argv[argv.index("-w") + 1] == str(tmp_path / "sub")
+
+
+def test_user_docker_args_reach_every_container(monkeypatch):
+    monkeypatch.setattr(core, "DOCKER_ARGS", ["-v", "/opt/tools:/opt/tools", "-e", "FOO=1"])
+    calls = []
+
+    class _Proc:
+        returncode, stdout = 0, ""
+
+    monkeypatch.setattr(docker.subprocess, "run",
+                        lambda cmd, **kw: calls.append(cmd) or _Proc())
+    monkeypatch.setattr(docker.os, "makedirs", lambda *a, **kw: None)
+    docker.run_build("true", "img")
+    docker.run_in_container("true", "img")
+    docker.run_renode_test("t.robot", "img", "res")
+    docker.run_renode("j.resc", "img")
+    for cmd in calls:
+        i = cmd.index("/opt/tools:/opt/tools")
+        assert cmd[i - 1] == "-v" and cmd[i + 1:i + 3] == ["-e", "FOO=1"]
+        assert i < cmd.index("img")             # flags must precede the image
+
+
+def test_no_docker_steps_run_in_config_dir(monkeypatch, tmp_path):
+    monkeypatch.setattr(core, "NO_DOCKER", True)
+    monkeypatch.setattr(core, "CONFIG_DIR", str(tmp_path / "sub"))
+    cwds = []
+
+    class _Proc:
+        returncode, stdout = 0, ""
+
+    monkeypatch.setattr(docker.subprocess, "run",
+                        lambda cmd, **kw: cwds.append(kw.get("cwd")) or _Proc())
+    docker.run_build("true", "img")
+    docker.run_in_container("true", "img")
+    docker.run_renode_test("t.robot", "img", "res")
+    docker.run_renode("j.resc", "img")
+    assert cwds == [str(tmp_path / "sub")] * 4
 
 
 def test_docker_argv_does_not_publish_ports():
@@ -60,9 +113,9 @@ def test_every_container_uses_host_network(monkeypatch):
     assert all("--net=host" in cmd for cmd in calls)
 
 
-def test_docker_argv_appends_extra_args_after_resc():
+def test_docker_argv_appends_extra_args_after_resc(tmp_path):
     argv = docker.build_renode_argv("j.resc", "img", extra_args=["--console", "--hide-log"])
-    assert argv[-3:] == ["j.resc", "--console", "--hide-log"]
+    assert argv[-3:] == [str(tmp_path / "j.resc"), "--console", "--hide-log"]
 
 
 # ---- _runtime_flags ----

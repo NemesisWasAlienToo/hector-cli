@@ -36,6 +36,61 @@ def test_config_path_returns_requested_when_neither_exists(tmp_path, monkeypatch
     assert resolve_config_path("missing.yaml") == "missing.yaml"
 
 
+# ---- load_config_or_exit: the config's directory ----
+
+@pytest.fixture
+def config_in_subdir(tmp_path, monkeypatch):
+    from hector import core, pipeline
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(core, "WORKSPACE_MOUNT", str(tmp_path))
+    monkeypatch.setattr(core, "NO_DOCKER", False)
+    monkeypatch.setattr(core, "CONFIG_DIR", None)
+    monkeypatch.setattr(core, "EXTRA_MOUNTS", [])
+    (tmp_path / "board").mkdir()
+    (tmp_path / "board" / ".hector.yaml").write_text("renode_version: '1.16.1'\n")
+    return pipeline, core, tmp_path
+
+
+def test_load_config_sets_config_dir(config_in_subdir, monkeypatch):
+    pipeline, core, root = config_in_subdir
+    monkeypatch.setattr(pipeline, "CONFIG_PATH", "board/.hector.yaml")
+    pipeline.load_config_or_exit()
+    assert core.CONFIG_DIR == str(root / "board")
+    assert core.execution_dir() == str(root / "board")
+    assert core.EXTRA_MOUNTS == []            # inside the cwd mount already
+
+
+def test_load_config_outside_cwd_is_mounted_too(config_in_subdir, monkeypatch):
+    # Run from a sibling dir: the cwd stays the workspace mount, and ../board is
+    # bind-mounted 1:1 so the config's paths and working dir are reachable.
+    pipeline, core, root = config_in_subdir
+    (root / "elsewhere").mkdir()
+    monkeypatch.setattr(core, "WORKSPACE_MOUNT", str(root / "elsewhere"))
+    monkeypatch.chdir(root / "elsewhere")
+    monkeypatch.setattr(pipeline, "CONFIG_PATH", "../board/.hector.yaml")
+    pipeline.load_config_or_exit()
+    board = str((root / "board").resolve())
+    assert core.EXTRA_MOUNTS == [board]
+    assert core.execution_dir() == board
+    assert core.to_container_path(core.from_config("fw.elf")) == f"{board}/fw.elf"
+
+
+# ---- apply_docker_args ----
+
+@pytest.mark.parametrize("cfg,flag,expected", [
+    ({}, "", []),
+    ({"docker_args": "-v /a:/a -e X=1"}, "", ["-v", "/a:/a", "-e", "X=1"]),
+    ({"docker_args": ["-v /a:/a", "--env 'Y=two words'"]}, "",
+     ["-v", "/a:/a", "--env", "Y=two words"]),
+    ({"docker_args": "-v /a:/a"}, "-v /b:/b", ["-v", "/a:/a", "-v", "/b:/b"]),  # flag appends
+])
+def test_apply_docker_args(monkeypatch, cfg, flag, expected):
+    from hector import core, pipeline
+    monkeypatch.setattr(core, "DOCKER_ARGS", [])
+    pipeline.apply_docker_args(cfg, SimpleNamespace(docker_args=flag))
+    assert core.DOCKER_ARGS == expected
+
+
 # ---- resolve_renode_image ----
 
 def test_image_from_config():

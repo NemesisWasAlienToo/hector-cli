@@ -33,7 +33,7 @@ YAML then accepts:   mappings: |\n  boardA.eth0 -> tap:tap0
 from dataclasses import dataclass, field
 from typing import List
 
-from .core import Registry, RuntimeOptions, parse_endpoint, to_container_path
+from .core import Registry, RuntimeOptions, from_config, parse_endpoint, to_container_path
 from .generator import queue_command
 
 MAPPING_BACKENDS = Registry("mapping backend")
@@ -55,7 +55,7 @@ def file_backend(_node_name, peripheral, param, _node_config):
     if not param:
         raise ValueError("'file' backend requires a path (file:<path>).")
     return MappingResult(
-        machine_cmd=f"{peripheral} CreateFileBackend @{to_container_path(param)} true",
+        machine_cmd=f"{peripheral} CreateFileBackend @{to_container_path(from_config(param))} true",
     )
 
 

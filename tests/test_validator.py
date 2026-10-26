@@ -39,6 +39,22 @@ def test_missing_renode_version_is_error():
     assert any(i.path == "renode_version" for i in errors)
 
 
+def test_renode_image_alone_satisfies_requirement():
+    errors, _ = validate_config({"renode_image": "my-renode:dev"})
+    assert errors == []
+
+
+@pytest.mark.parametrize("value", ["-v /a:/a", ["-v /a:/a", "-e X=1"]])
+def test_docker_args_accepts_string_or_list(value):
+    errors, warnings = validate_config({"renode_version": "1.16.1", "docker_args": value})
+    assert errors == [] and not any(w.path == "docker_args" for w in warnings)
+
+
+def test_docker_args_wrong_type_is_error():
+    errors, _ = validate_config({"renode_version": "1.16.1", "docker_args": {"v": "/a"}})
+    assert any(i.path == "docker_args" for i in errors)
+
+
 def test_unknown_module_kind_is_error():
     cfg = {"renode_version": "1.16.1",
            "modules": {"u": {"kind": "bogus", "type": "X", "source": "s"}}}

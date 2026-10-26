@@ -104,7 +104,16 @@ def load_config_or_exit():
     if v is not None and str(v) not in SUPPORTED_SCHEMA_VERSIONS:
         print(f"[WARN] .hector.yaml 'version: {v}' is not in supported versions "
               f"({', '.join(sorted(SUPPORTED_SCHEMA_VERSIONS))}). Proceeding anyway.")
+    _set_config_dir(config_path)
     return config
+
+
+def _set_config_dir(config_path):
+    """Make the config's directory the base for its paths and the working directory of
+    everything executed (see core.CONFIG_DIR). The cwd stays the workspace mount; a
+    config outside it gets its directory bind-mounted 1:1 as well, so it's reachable."""
+    _core.CONFIG_DIR = os.path.realpath(os.path.dirname(os.path.abspath(config_path)))
+    _core.register_dependency_mount(_core.CONFIG_DIR)
 
 
 _VERSION_TAG_RE = re.compile(r"^v?\d+\.\d+\.\d+$")
@@ -138,6 +147,16 @@ def resolve_renode_image(config, args):
     return (f"v{normalized}" if normalized else None), image
 
 
+def apply_docker_args(config, args):
+    """Collect the user's extra `docker run` flags — the config's `docker_args:` (a
+    string or a list of strings) followed by --docker-args — into core.DOCKER_ARGS."""
+    raw = config.get("docker_args") or []
+    flags = []
+    for item in ([raw] if isinstance(raw, str) else raw):
+        flags += shlex.split(str(item))
+    _core.DOCKER_ARGS = flags + shlex.split(getattr(args, "docker_args", "") or "")
+
+
 def _resolve_set_overrides(args):
     overrides = {}
     for kv in (getattr(args, "set_args", None) or []):
@@ -166,6 +185,7 @@ def build_job_config(action, config, args, *, test_mode=False):
     """Assemble a JobConfig from parsed args — the shared run / test / export path:
     pin the image, prepare the framework (lazily), resolve arguments + artifacts."""
     git_tag, docker_image = resolve_renode_image(config, args)
+    apply_docker_args(config, args)
 
     # Clone Renode only when the config actually needs the source; otherwise skip it
     # entirely (a ~200 MB clone) and leave the framework vars empty.
@@ -186,8 +206,14 @@ def build_job_config(action, config, args, *, test_mode=False):
 
     resolved_args = resolve_arguments(config.get("arguments", {}),
                                       overrides=_resolve_set_overrides(args))
-    artifacts_cfg = (args.artifacts if getattr(args, "artifacts", None)
-                     else as_lines(config.get("artifacts", [])))
+    # --artifacts globs are relative to where hector runs; the config's own 'artifacts:'
+    # to the config's directory (like every other path written in the config).
+    if getattr(args, "artifacts", None):
+        artifacts_cfg, artifacts_base = args.artifacts, os.getcwd()
+    else:
+        artifacts_cfg = as_lines(config.get("artifacts", []))
+        artifacts_base = _core.config_dir()
+    test_file = getattr(args, "test_file", None)
     return JobConfig(
         config=config,
         fw_vars=fw_vars,
@@ -196,7 +222,8 @@ def build_job_config(action, config, args, *, test_mode=False):
         action=action,
         test_mode=test_mode,
         debug_args=getattr(args, "debug", None) or [],
-        test_file=getattr(args, "test_file", None),
+        # Absolute so it isn't re-resolved against the config's directory.
+        test_file=os.path.abspath(test_file) if test_file else None,
         reporter_names=_resolve_reporters(getattr(args, "reporters", None)),
         renode_args=shlex.split(getattr(args, "renode_args", "") or ""),
         renode_test_args=shlex.split(getattr(args, "renode_test_args", "") or ""),
@@ -208,6 +235,7 @@ def build_job_config(action, config, args, *, test_mode=False):
         output_dir=getattr(args, "output", "results"),
         gather_metrics=getattr(args, "gather_execution_metrics", None),
         artifacts=artifacts_cfg,
+        artifacts_base=artifacts_base,
     )
 
 
@@ -241,6 +269,7 @@ def snapshot_fastpath(args):
         print(f"[ERROR] Snapshot not found: {args.snapshot}", file=sys.stderr)
         sys.exit(1)
     _, docker_image = resolve_renode_image({}, args)
+    apply_docker_args({}, args)
     resc_root = os.path.join(ARTIFACTS_DIR, "resc")
     os.makedirs(resc_root, exist_ok=True)
     # No .hector.yaml here, so debug machine names come straight from --debug.
@@ -485,6 +514,7 @@ class JobConfig:
     output_dir: str = "results"
     gather_metrics: list = None
     artifacts: list = field(default_factory=list)
+    artifacts_base: str = "."           # directory the artifact globs resolve against
 
 
 @dataclass
@@ -757,7 +787,8 @@ def run_job(i, total_jobs, job_context, cfg):
         # Global glob patterns (top-level 'artifacts:' or --artifacts), interpolated
         # with this job's context so matrix variables resolve.
         artifact_patterns = as_lines(interpolate(list(cfg.artifacts), context))
-        collect_artifacts(artifact_patterns, cfg.output_dir, i + 1)
+        collect_artifacts(artifact_patterns, cfg.output_dir, i + 1,
+                          base_dir=cfg.artifacts_base)
 
     except Exception as exc:
         result["passed"] = False

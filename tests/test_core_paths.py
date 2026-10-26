@@ -84,6 +84,33 @@ def test_container_path_for_prefers_extra_mount(project, tmp_path_factory):
     assert core.container_path_for(str(inner)) == str((cache / "renode" / "x.so").resolve())
 
 
+def test_from_config_resolves_against_config_dir(project, monkeypatch):
+    monkeypatch.setattr(core, "CONFIG_DIR", str(project / "board"))
+    assert core.from_config("fw/app.elf") == str(project / "board" / "fw" / "app.elf")
+    assert core.from_config("../shared/x.repl") == str(project / "shared" / "x.repl")
+
+
+def test_from_config_leaves_absolute_and_urls(project, monkeypatch):
+    monkeypatch.setattr(core, "CONFIG_DIR", str(project / "board"))
+    for p in ("/opt/renode/x.repl", "https://example.com/fw.elf", "", None):
+        assert core.from_config(p) == p
+
+
+def test_from_config_defaults_to_cwd(project, monkeypatch):
+    monkeypatch.setattr(core, "CONFIG_DIR", None)
+    assert core.from_config("fw.elf") == str(project / "fw.elf")
+
+
+def test_execution_dir_is_container_path_of_config_dir(project, monkeypatch):
+    (project / "board").mkdir()
+    monkeypatch.setattr(core, "NO_DOCKER", False)
+    monkeypatch.setattr(core, "WORKSPACE_MOUNT", "/workspace")
+    monkeypatch.setattr(core, "CONFIG_DIR", str(project / "board"))
+    assert core.execution_dir() == "/workspace/board"
+    monkeypatch.setattr(core, "NO_DOCKER", True)
+    assert core.execution_dir() == str(project / "board")
+
+
 def test_host_uid_gid_on_posix():
     ids = core.host_uid_gid()
     if hasattr(os, "getuid"):

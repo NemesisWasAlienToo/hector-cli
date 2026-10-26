@@ -20,7 +20,7 @@ import time
 from dataclasses import dataclass, field
 
 from . import core as _core
-from .core import ARTIFACTS_DIR, Registry, to_container_path
+from .core import ARTIFACTS_DIR, Registry, from_config, to_container_path
 from .docker import resolve_shell_image, run_in_container, run_renode_test
 from .reporters import StepResult
 
@@ -170,7 +170,7 @@ def generate_robot_file(test_name, steps, resc_host_path, job_index, test_index,
 def _run_robot_test(test, steps, ctx, test_index):
     """Run a robot test. Returns a single StepResult for the whole test."""
     test_name = test.get("name", f"test_{test_index}")
-    effective_snapshot = ctx.snapshot or test.get("snapshot", "")
+    effective_snapshot = ctx.snapshot or from_config(test.get("snapshot", ""))
     if effective_snapshot and not os.path.isfile(effective_snapshot):
         raise FileNotFoundError(f"Snapshot not found: {effective_snapshot}")
 
@@ -190,7 +190,7 @@ def _run_robot_test(test, steps, ctx, test_index):
     if len(steps) == 1 and steps[0].get("file"):
         if effective_snapshot:
             print("  [WARN] snapshot ignored for file-based robot tests.")
-        robot_file = steps[0]["file"]
+        robot_file = from_config(steps[0]["file"])
     else:
         if any(s.get("file") for s in steps):
             raise ValueError(f"Test '{test_name}': mixing file: and script: steps is not supported.")

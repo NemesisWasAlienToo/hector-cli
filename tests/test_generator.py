@@ -6,7 +6,7 @@ import os
 import pytest
 
 from hector.generator import (NodeDescriptor, PeripheralDef, build_repl_fragment,
-                              finalize_commands, generate_emulation_resc,
+                              collect_artifacts, finalize_commands, generate_emulation_resc,
                               generate_node_repl, repl_value, snapshot_resc,
                               write_inline_repl)
 
@@ -194,3 +194,19 @@ def test_snapshot_resc_reopens_gdb_after_load():
     # A GDB server is never part of saved state, so it must be (re)started post-Load.
     assert text.index("Load @") < text.index("StartGdbServer 4444")
     assert 'mach set "mcu"' in text
+
+
+# ---- collect_artifacts ----
+
+def test_collect_artifacts_resolves_against_base_dir(tmp_path, monkeypatch):
+    # Config in board/: its 'artifacts:' globs resolve there, not against the cwd.
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "board" / "build").mkdir(parents=True)
+    (tmp_path / "board" / "build" / "fw.bin").write_text("x")
+    (tmp_path / "board" / "uart.log").write_text("x")
+    (tmp_path / "other.log").write_text("x")
+    collected = collect_artifacts(["build/*.bin", "*.log"], "results", 1,
+                                  base_dir=str(tmp_path / "board"))
+    assert sorted(collected) == [
+        os.path.join("results", "artifacts", "job_1", "board", "build", "fw.bin"),
+        os.path.join("results", "artifacts", "job_1", "board", "uart.log")]

@@ -48,16 +48,17 @@ def _user_flags():
 
 
 def _workspace_mount():
-    return ["-v", f"{os.getcwd()}:{core.WORKSPACE_MOUNT}", "-w", core.WORKSPACE_MOUNT]
+    return ["-v", f"{os.getcwd()}:{core.WORKSPACE_MOUNT}", "-w", core.execution_dir()]
 
 
 def _extra_mounts():
-    """Bind-mount out-of-tree dependency dirs (e.g. a shared Renode source cache) 1:1, so
-    containers reach them at the same path they have on the host. Empty for the common case."""
+    """Bind-mount out-of-tree dirs (the config's dir, a shared Renode source cache) 1:1,
+    so containers reach them at the same path they have on the host, then append the
+    user's own `docker run` flags (extra -v mounts, --env, ...). Empty for the common case."""
     args = []
     for d in core.EXTRA_MOUNTS:
         args += ["-v", f"{d}:{d}"]
-    return args
+    return args + core.DOCKER_ARGS
 
 
 # Every container shares the host's network stack: GDB servers, tcp: mappings and
@@ -93,7 +94,7 @@ def _runtime_flags(runtime):
 def run_build(script, image):
     """Run a build script in the container as root (for apt-get + cmake)."""
     if core.NO_DOCKER:
-        subprocess.run(["bash", "-c", script], check=True)
+        subprocess.run(["bash", "-c", script], check=True, cwd=core.execution_dir())
         return
     subprocess.run(
         ["docker", "run", "--rm", *_HOST_NETWORK, "-u", "0:0",
@@ -131,14 +132,17 @@ def run_in_container(script, image, live=False):
     fail on the first error.
 
     Backs the `shell` test type and the `build:` steps. Normally a one-off container of
-    `image`; under --no-docker the script runs directly on the host (the image is moot)."""
+    `image`; under --no-docker the script runs directly on the host (the image is moot).
+    Either way it runs in the config's directory (core.execution_dir)."""
+    cwd = None
     if core.NO_DOCKER:
         cmd = ["bash", "-c", f"set -ex\n{script}"]
+        cwd = core.execution_dir()
     else:
         cmd = ["docker", "run", "--rm", *_HOST_NETWORK, *_workspace_mount(),
                *_extra_mounts(), *_user_flags(), image, "sh", "-c", f"set -ex\n{script}"]
     if live:
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, cwd=cwd,
                                 stderr=subprocess.STDOUT, text=True)
         lines = []
         for line in proc.stdout:
@@ -146,7 +150,8 @@ def run_in_container(script, image, live=False):
             lines.append(line)
         proc.wait()
         return "".join(lines), proc.returncode == 0
-    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                          cwd=cwd)
     if proc.stdout:
         print(proc.stdout, end="")
     return proc.stdout, proc.returncode == 0
@@ -158,12 +163,13 @@ def build_renode_argv(resc_filename, image, extra_args=None, runtime=None):
 
     Returning the command (instead of running it) is what lets the `export` command
     print it verbatim and keeps run_renode a one-liner around this builder.
-    runtime: aggregated RuntimeOptions whose docker flags (caps/devices/root) are added."""
+    runtime: aggregated RuntimeOptions whose docker flags (caps/devices/root) are added.
+    The resc path is made absolute: Renode runs in the config's directory, not the cwd."""
     if core.NO_DOCKER:
-        return ["renode", resc_filename] + (extra_args or [])
+        return ["renode", os.path.abspath(resc_filename)] + (extra_args or [])
     return ["docker", "run", "-it", "--rm", *_xdisplay_args(), *_HOST_NETWORK,
             *_workspace_mount(), *_extra_mounts(), *_user_flags(), *_runtime_flags(runtime),
-            image, "renode", resc_filename] + (extra_args or [])
+            image, "renode", to_container_path(resc_filename)] + (extra_args or [])
 
 
 def run_renode(resc_filename, image, extra_args=None, output_dir="results", runtime=None):
@@ -172,7 +178,8 @@ def run_renode(resc_filename, image, extra_args=None, output_dir="results", runt
     runtime: aggregated RuntimeOptions whose docker flags (caps/devices/root) are added."""
     if not core.NO_DOCKER:
         os.makedirs(os.path.join(os.getcwd(), output_dir), exist_ok=True)
-    subprocess.run(build_renode_argv(resc_filename, image, extra_args, runtime))
+    subprocess.run(build_renode_argv(resc_filename, image, extra_args, runtime),
+                   cwd=core.execution_dir() if core.NO_DOCKER else None)
 
 
 def run_renode_test(robot_file_host, image, results_dir_host,
@@ -186,12 +193,14 @@ def run_renode_test(robot_file_host, image, results_dir_host,
     """
     os.makedirs(results_dir_host, exist_ok=True)
     if core.NO_DOCKER:
-        cmd = ["renode-test", robot_file_host, "-r", results_dir_host]
+        # Absolute paths: renode-test runs in the config's directory, not the cwd.
+        cmd = ["renode-test", os.path.abspath(robot_file_host),
+               "-r", os.path.abspath(results_dir_host)]
         if resc_host_path:
-            cmd += ["--variable", f"RESC:{resc_host_path}"]
+            cmd += ["--variable", f"RESC:{os.path.abspath(resc_host_path)}"]
         if extra_args:
             cmd += extra_args
-        result = subprocess.run(cmd)
+        result = subprocess.run(cmd, cwd=core.execution_dir())
         return result.returncode == 0
     flags = ["-it"] if interactive else []
     display = _xdisplay_args() if interactive else []
