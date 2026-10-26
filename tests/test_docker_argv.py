@@ -37,10 +37,27 @@ def test_docker_argv_core_tokens():
     assert argv[i + 1:i + 3] == ["renode", "job.resc"]
 
 
-def test_docker_argv_publishes_ports():
-    argv = docker.build_renode_argv("j.resc", "img", ports=[3333, 3334])
-    joined = " ".join(argv)
-    assert "-p 3333:3333" in joined and "-p 3334:3334" in joined
+def test_docker_argv_does_not_publish_ports():
+    # Host networking exposes GDB ports directly; -p would be ignored by Docker.
+    argv = docker.build_renode_argv("j.resc", "img")
+    assert "-p" not in argv
+
+
+def test_every_container_uses_host_network(monkeypatch):
+    calls = []
+
+    class _Proc:
+        returncode, stdout = 0, ""
+
+    monkeypatch.setattr(docker.subprocess, "run",
+                        lambda cmd, **kw: calls.append(cmd) or _Proc())
+    monkeypatch.setattr(docker.os, "makedirs", lambda *a, **kw: None)
+    docker.run_build("true", "img")
+    docker.run_in_container("true", "img")
+    docker.run_renode_test("t.robot", "img", "res")
+    docker.run_renode("j.resc", "img")
+    assert len(calls) == 4
+    assert all("--net=host" in cmd for cmd in calls)
 
 
 def test_docker_argv_appends_extra_args_after_resc():

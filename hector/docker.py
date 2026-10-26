@@ -60,6 +60,13 @@ def _extra_mounts():
     return args
 
 
+# Every container shares the host's network stack: GDB servers, tcp: mappings and
+# anything a build/test step listens on are reachable from the host as-is, and steps
+# can reach host services (e.g. a local registry or a TCP-mapped UART) on localhost.
+# No -p publishing is needed (Docker ignores it in this mode anyway).
+_HOST_NETWORK = ["--net=host"]
+
+
 def _runtime_flags(runtime):
     """Map aggregated RuntimeOptions (capabilities/devices/root, declared by mappings,
     hubs, modules) to `docker run` flags.
@@ -89,7 +96,7 @@ def run_build(script, image):
         subprocess.run(["bash", "-c", script], check=True)
         return
     subprocess.run(
-        ["docker", "run", "--rm", "-u", "0:0",
+        ["docker", "run", "--rm", *_HOST_NETWORK, "-u", "0:0",
          *_workspace_mount(), *_extra_mounts(), image, "bash", "-c", script],
         check=True,
     )
@@ -128,8 +135,8 @@ def run_in_container(script, image, live=False):
     if core.NO_DOCKER:
         cmd = ["bash", "-c", f"set -ex\n{script}"]
     else:
-        cmd = ["docker", "run", "--rm", *_workspace_mount(), *_extra_mounts(),
-               *_user_flags(), image, "sh", "-c", f"set -ex\n{script}"]
+        cmd = ["docker", "run", "--rm", *_HOST_NETWORK, *_workspace_mount(),
+               *_extra_mounts(), *_user_flags(), image, "sh", "-c", f"set -ex\n{script}"]
     if live:
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, text=True)
@@ -145,7 +152,7 @@ def run_in_container(script, image, live=False):
     return proc.stdout, proc.returncode == 0
 
 
-def build_renode_argv(resc_filename, image, ports=None, extra_args=None, runtime=None):
+def build_renode_argv(resc_filename, image, extra_args=None, runtime=None):
     """Build the exact argv that would run an emulation resc — the local `renode`
     invocation under --no-docker, otherwise the full `docker run ... renode` command.
 
@@ -154,20 +161,18 @@ def build_renode_argv(resc_filename, image, ports=None, extra_args=None, runtime
     runtime: aggregated RuntimeOptions whose docker flags (caps/devices/root) are added."""
     if core.NO_DOCKER:
         return ["renode", resc_filename] + (extra_args or [])
-    cmd = ["docker", "run", "-it", "--rm", *_xdisplay_args(), "--net=host",
-           *_workspace_mount(), *_extra_mounts(), *_user_flags(), *_runtime_flags(runtime)]
-    for port in (ports or []):
-        cmd += ["-p", f"{port}:{port}"]
-    cmd += [image, "renode", resc_filename] + (extra_args or [])
-    return cmd
+    return ["docker", "run", "-it", "--rm", *_xdisplay_args(), *_HOST_NETWORK,
+            *_workspace_mount(), *_extra_mounts(), *_user_flags(), *_runtime_flags(runtime),
+            image, "renode", resc_filename] + (extra_args or [])
 
 
-def run_renode(resc_filename, image, ports=None, extra_args=None, output_dir="results", runtime=None):
-    """Run an emulation resc interactively. In debug mode, expose GDB ports.
+def run_renode(resc_filename, image, extra_args=None, output_dir="results", runtime=None):
+    """Run an emulation resc interactively. GDB ports (--debug) are reachable from the
+    host through the host network.
     runtime: aggregated RuntimeOptions whose docker flags (caps/devices/root) are added."""
     if not core.NO_DOCKER:
         os.makedirs(os.path.join(os.getcwd(), output_dir), exist_ok=True)
-    subprocess.run(build_renode_argv(resc_filename, image, ports, extra_args, runtime))
+    subprocess.run(build_renode_argv(resc_filename, image, extra_args, runtime))
 
 
 def run_renode_test(robot_file_host, image, results_dir_host,
@@ -177,8 +182,7 @@ def run_renode_test(robot_file_host, image, results_dir_host,
     resc_host_path: passed as --variable RESC:<path> so .robot files can load
     the generated emulation script via ${RESC}.
     extra_args: optional list of additional flags forwarded verbatim to renode-test.
-    interactive: attach stdin/tty and add --net=host (useful with Pause Execution
-    or when TCP ports need to be reachable from the host during the test).
+    interactive: attach stdin/tty and X display (useful with Pause Execution).
     """
     os.makedirs(results_dir_host, exist_ok=True)
     if core.NO_DOCKER:
@@ -190,9 +194,8 @@ def run_renode_test(robot_file_host, image, results_dir_host,
         result = subprocess.run(cmd)
         return result.returncode == 0
     flags = ["-it"] if interactive else []
-    net = ["--net=host"] if interactive else []
     display = _xdisplay_args() if interactive else []
-    cmd = ["docker", "run", "--rm", *flags, *net, *display,
+    cmd = ["docker", "run", "--rm", *flags, *_HOST_NETWORK, *display,
            *_workspace_mount(), *_extra_mounts(), *_user_flags(), *_runtime_flags(runtime),
            image, "renode-test", to_container_path(robot_file_host),
            "-r", to_container_path(results_dir_host)]

@@ -452,6 +452,10 @@ hector run --renode-args '--console'
 hector run --renode-args '--hide-log --config my.conf'
 ```
 
+#### Container networking
+
+Every container hector starts — the Renode emulation (`run`), robot tests, `shell` tests, `build:` steps and module builds — runs with `--net=host`. GDB servers (`--debug`), `tcp:` mappings and anything a step listens on are reachable from the host on the same port, and steps can reach host services on `localhost`. No port publishing is involved.
+
 #### Running without Docker (`--no-docker`)
 
 Call the locally installed `renode` and `renode-test` binaries directly instead of launching a Docker container. `build:` steps and `shell` tests also run on the host (their `image:` is ignored, with a warning), as do module builds.

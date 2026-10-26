@@ -251,8 +251,7 @@ def snapshot_fastpath(args):
                               no_start=getattr(args, "no_start", False)))
     print(f"[SNAP] {args.snapshot}"
           + (f" (+GDB: {debug_config})" if debug_config else ""))
-    run_renode(snap_resc, docker_image, ports=list(debug_config.values()) or None,
-               extra_args=shlex.split(args.renode_args or ""), output_dir=args.output)
+    run_renode(snap_resc, docker_image, extra_args=shlex.split(args.renode_args or ""), output_dir=args.output)
 
 
 def _run_validate():
@@ -524,7 +523,6 @@ def action_simulate(state, cfg, result):
     if not state.resc_filename:
         raise ValueError("`hector run` needs at least one machine in 'machines:'.")
     run_renode(_resolve_active_resc(state, cfg), cfg.docker_image,
-               ports=list(state.debug_config.values()) or None,
                extra_args=cfg.renode_args, output_dir=cfg.output_dir,
                runtime=state.runtime)
 
@@ -536,7 +534,6 @@ def action_export(state, cfg, result):
     if not state.resc_filename:
         raise ValueError("`hector export` needs at least one machine in 'machines:'.")
     argv = build_renode_argv(_resolve_active_resc(state, cfg), cfg.docker_image,
-                             ports=list(state.debug_config.values()) or None,
                              extra_args=cfg.renode_args, runtime=state.runtime)
     line = shlex.join(argv)
     print(line)
