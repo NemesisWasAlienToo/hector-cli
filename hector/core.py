@@ -67,7 +67,7 @@ class Registry:
 # ==========================================================================
 # CONSTANTS
 # ==========================================================================
-TOOL_VERSION = "0.6.0"
+TOOL_VERSION = "0.7.0"
 SUPPORTED_SCHEMA_VERSIONS = {"0.1"}
 
 RENODE_REPO_URL = "https://github.com/renode/renode.git"
@@ -78,7 +78,10 @@ ARTIFACTS_DIR = ".hector"          # everything we generate/clone lives here (gi
 # hosts we mirror the host cwd, so paths look identical in and out; on Windows the host
 # path (C:\...) is not a valid Linux path, so use a fixed POSIX mount point and translate.
 WORKSPACE_MOUNT = "/workspace" if os.name == "nt" else os.getcwd()
-NO_DOCKER = False                  # when True, call renode/renode-test directly on host
+# Host directory bind-mounted at WORKSPACE_MOUNT. None = the cwd; --workspace-mount
+# sets it to the config's directory, so the mount point is where execution happens.
+WORKSPACE_ROOT = None
+NO_DOCKER = False                 # when True, call renode/renode-test directly on host
 EXTRA_MOUNTS = []                  # dep dirs outside the workspace, bind-mounted 1:1 into every container
 DOCKER_ARGS = []                   # user flags (docker_args: + --docker-args) added to every `docker run`
 # Host directory of the config file being executed. Paths written in the config resolve
@@ -124,12 +127,17 @@ def host_uid_gid():
     return None
 
 
+def workspace_root():
+    """Host directory mounted at WORKSPACE_MOUNT (see WORKSPACE_ROOT)."""
+    return os.path.realpath(WORKSPACE_ROOT or os.getcwd())
+
+
 def to_container_path(host_path):
     abs_path = os.path.realpath(host_path)
-    root = os.path.realpath(os.getcwd())
+    root = workspace_root()
     if os.path.commonpath([abs_path, root]) != root:
-        # Out-of-tree dirs registered in EXTRA_MOUNTS (the config's dir, a shared
-        # Renode cache) are mounted 1:1, so their paths are valid as-is.
+        # Dirs outside the workspace registered in EXTRA_MOUNTS (the config's dir or the
+        # cwd, a shared Renode cache) are mounted 1:1, so their paths are valid as-is.
         for m in EXTRA_MOUNTS:
             if os.path.commonpath([abs_path, m]) == m:
                 return abs_path
@@ -150,13 +158,12 @@ def register_dependency_mount(host_dir):
     Dirs under the workspace are already covered by the workspace mount, so they map via
     to_container_path. An out-of-tree dir (e.g. a shared cache) is registered in
     EXTRA_MOUNTS and used at its own absolute path inside the container."""
-    abs_dir = os.path.realpath(host_dir)
-    root = os.path.realpath(os.getcwd())
-    if os.path.commonpath([abs_dir, root]) == root:
-        return to_container_path(host_dir)
-    if abs_dir not in EXTRA_MOUNTS:
+    try:
+        return to_container_path(host_dir)    # already reachable through some mount
+    except ValueError:
+        abs_dir = os.path.realpath(host_dir)
         EXTRA_MOUNTS.append(abs_dir)
-    return abs_dir
+        return abs_dir
 
 
 def container_path_for(host_path):
@@ -176,8 +183,8 @@ def container_to_host(container_path):
     if container_path != WORKSPACE_MOUNT and not container_path.startswith(WORKSPACE_MOUNT + "/"):
         raise ValueError(f"'{container_path}' is not under {WORKSPACE_MOUNT}.")
     rel = posixpath.relpath(container_path, WORKSPACE_MOUNT).replace("/", os.sep)
-    host = os.path.realpath(os.path.join(os.getcwd(), rel))
-    root = os.path.realpath(os.getcwd())
+    root = workspace_root()
+    host = os.path.realpath(os.path.join(root, rel))
     if os.path.commonpath([host, root]) != root:
         raise ValueError(f"'{container_path}' maps outside the project root.")
     return host

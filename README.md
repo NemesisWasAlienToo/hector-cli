@@ -180,7 +180,7 @@ the CLI natively with `pip` and let hector launch real per-step containers.
 | `hector run --renode-dir /cache/renode` | Use/cache the Renode source checkout at this path (only fetched when needed) |
 | `hector run --renode-integration-dir /cache/integration` | Likewise for the verilator-integration checkout |
 | `hector run --no-docker` | Use locally installed `renode` / `renode-test` instead of Docker |
-| `hector run --workspace-mount /mnt` | Override the container path the project root is mounted at |
+| `hector run --workspace-mount /mnt` | Mount the hectorfile's folder at this container path and execute there |
 | `hector run --snapshot path/to/snapshot.save` | Load a snapshot instead of booting from the resc |
 | `hector run --snapshot snap.save --renode-version 1.16.1` | Load a snapshot without a `.hector.yaml` |
 | `hector test` | Run the `tests:` section; exit 1 on any failure |
@@ -457,7 +457,7 @@ hector run --renode-args '--hide-log --config my.conf'
 
 Everything a hectorfile executes — `build:` steps, `shell` tests, Renode and `renode-test` — runs **in the hectorfile's folder**, and paths written in the file (`firmware:`, `platform:`, module `source:`, test `file:` / `snapshot:`, `file:` mappings, `artifacts:`, paths inside scripts and `commands:`) are **relative to that folder**. So `hector test -f boards/nucleo/.hector.yaml` behaves the same as running `hector test` inside `boards/nucleo/`.
 
-The directory you run hector from is mounted into the container (at the same path), and the container's working directory (`-w`) is the hectorfile's folder. If the hectorfile lives **outside** the directory you run from (`hector test -f ../other/.hector.yaml`), its folder is mounted as well, at its own path. A path like `../shared/board.repl` works as long as it lands inside one of those mounts — for anything else, add a mount with [`docker_args`](#extra-docker-flags---docker-args). Under `--no-docker` the processes simply run with the hectorfile's folder as their cwd.
+The directory you run hector from is mounted into the container (at the same path), and the container's working directory (`-w`) is the hectorfile's folder. If the hectorfile lives **outside** the directory you run from (`hector test -f ../other/.hector.yaml`), its folder is mounted as well, at its own path. (With [`--workspace-mount`](#overriding-the-workspace-mount-path---workspace-mount) the hectorfile's folder is mounted at the given path instead.) A path like `../shared/board.repl` works as long as it lands inside one of those mounts — for anything else, add a mount with [`docker_args`](#extra-docker-flags---docker-args). Under `--no-docker` the processes simply run with the hectorfile's folder as their cwd.
 
 Paths given on the **command line** (`--output`, `--snapshot`, `--test-file`, `--artifacts`, `--renode-dir`, …) stay relative to where you run hector, and `.hector/` is still created there.
 
@@ -542,11 +542,14 @@ An existing directory is reused as-is; a missing one is cloned into. The locatio
 
 #### Overriding the workspace mount path (`--workspace-mount`)
 
-By default the project root is bind-mounted into the container at the **same absolute path** as on the host (e.g. `/home/user/projects/myboard`), so paths look identical inside and outside the container. Override this only if the host path is unavailable at that location inside the image:
+By default everything is bind-mounted into the container at the **same absolute path** as on the host (e.g. `/home/user/projects/myboard`), so paths look identical inside and outside the container. `--workspace-mount PATH` instead mounts the **hectorfile's folder** at `PATH`, and that's where every step, Renode and `renode-test` execute:
 
 ```bash
-hector run --workspace-mount /workspace
+hector run --workspace-mount /workspace                              # . → /workspace
+hector test -f boards/nucleo/.hector.yaml --workspace-mount /workspace  # boards/nucleo → /workspace
 ```
+
+When you run from a different folder than the hectorfile's (the second line), that folder — where `.hector/` and `--output` live — is additionally mounted at its own path, unless it's already inside the hectorfile's folder.
 
 **Cannot be combined with `--no-docker`** — if you are running locally there is no container mount to configure.
 

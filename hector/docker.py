@@ -48,7 +48,7 @@ def _user_flags():
 
 
 def _workspace_mount():
-    return ["-v", f"{os.getcwd()}:{core.WORKSPACE_MOUNT}", "-w", core.execution_dir()]
+    return ["-v", f"{core.workspace_root()}:{core.WORKSPACE_MOUNT}", "-w", core.execution_dir()]
 
 
 def _extra_mounts():

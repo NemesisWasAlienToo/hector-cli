@@ -110,8 +110,8 @@ def add_common_arguments(parser):
     )
     docker_mode.add_argument(
         "--workspace-mount", metavar="PATH", dest="workspace_mount", default=None,
-        help="Container path where the project root is bind-mounted "
-             "(default: same absolute path as on the host).",
+        help="Mount the hectorfile's folder at this container path and execute there "
+             "(default: everything is mounted at its own host path).",
     )
 
 

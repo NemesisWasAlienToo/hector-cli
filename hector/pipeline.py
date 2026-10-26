@@ -47,6 +47,9 @@ from .validator import print_issues, validate_config
 # The config file every command reads/writes. Overridable with -f/--file; set by
 # apply_global_flags before any config is loaded.
 CONFIG_PATH = ".hector.yaml"
+# --workspace-mount given: mount the config's directory (where execution happens) at
+# that path, instead of the cwd. Set by apply_global_flags, applied once the config loads.
+MOUNT_CONFIG_DIR = False
 
 
 def apply_global_flags(args):
@@ -60,7 +63,9 @@ def apply_global_flags(args):
         global CONFIG_PATH
         CONFIG_PATH = path
     if getattr(args, "workspace_mount", None):
+        global MOUNT_CONFIG_DIR
         _core.WORKSPACE_MOUNT = args.workspace_mount
+        MOUNT_CONFIG_DIR = True
     if getattr(args, "no_docker", False) or os.environ.get("HECTOR_NO_DOCKER"):
         _core.NO_DOCKER = True
         _core.WORKSPACE_MOUNT = os.getcwd()
@@ -110,10 +115,18 @@ def load_config_or_exit():
 
 def _set_config_dir(config_path):
     """Make the config's directory the base for its paths and the working directory of
-    everything executed (see core.CONFIG_DIR). The cwd stays the workspace mount; a
-    config outside it gets its directory bind-mounted 1:1 as well, so it's reachable."""
+    everything executed (see core.CONFIG_DIR), and make sure both it and the cwd (where
+    .hector/ and --output live) are reachable from the container.
+
+    By default the cwd is the workspace mount and a config dir outside it is mounted
+    1:1 as well. With --workspace-mount, the config dir is mounted at that path instead
+    (so execution happens there) and a cwd outside it is the one mounted 1:1."""
     _core.CONFIG_DIR = os.path.realpath(os.path.dirname(os.path.abspath(config_path)))
-    _core.register_dependency_mount(_core.CONFIG_DIR)
+    if MOUNT_CONFIG_DIR:
+        _core.WORKSPACE_ROOT = _core.CONFIG_DIR
+        _core.register_dependency_mount(os.getcwd())
+    else:
+        _core.register_dependency_mount(_core.CONFIG_DIR)
 
 
 _VERSION_TAG_RE = re.compile(r"^v?\d+\.\d+\.\d+$")

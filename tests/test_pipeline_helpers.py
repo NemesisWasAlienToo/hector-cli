@@ -46,6 +46,8 @@ def config_in_subdir(tmp_path, monkeypatch):
     monkeypatch.setattr(core, "NO_DOCKER", False)
     monkeypatch.setattr(core, "CONFIG_DIR", None)
     monkeypatch.setattr(core, "EXTRA_MOUNTS", [])
+    monkeypatch.setattr(core, "WORKSPACE_ROOT", None)
+    monkeypatch.setattr(pipeline, "MOUNT_CONFIG_DIR", False)
     (tmp_path / "board").mkdir()
     (tmp_path / "board" / ".hector.yaml").write_text("renode_version: '1.16.1'\n")
     return pipeline, core, tmp_path
@@ -73,6 +75,33 @@ def test_load_config_outside_cwd_is_mounted_too(config_in_subdir, monkeypatch):
     assert core.EXTRA_MOUNTS == [board]
     assert core.execution_dir() == board
     assert core.to_container_path(core.from_config("fw.elf")) == f"{board}/fw.elf"
+
+
+def test_workspace_mount_mounts_config_dir_there(config_in_subdir, monkeypatch):
+    # Run from the parent with --workspace-mount /workspace: the config's dir is what's
+    # mounted there and where execution happens; the cwd (.hector/, --output) is 1:1.
+    pipeline, core, root = config_in_subdir
+    monkeypatch.setattr(core, "WORKSPACE_MOUNT", "/workspace")
+    monkeypatch.setattr(pipeline, "MOUNT_CONFIG_DIR", True)
+    monkeypatch.setattr(pipeline, "CONFIG_PATH", "board/.hector.yaml")
+    pipeline.load_config_or_exit()
+    board, cwd = str((root / "board").resolve()), str(root.resolve())
+    assert core.workspace_root() == board
+    assert core.execution_dir() == "/workspace"
+    assert core.to_container_path(core.from_config("fw/app.elf")) == "/workspace/fw/app.elf"
+    assert core.EXTRA_MOUNTS == [cwd]
+    assert core.to_container_path(".hector/resc/job_1.resc") == f"{cwd}/.hector/resc/job_1.resc"
+
+
+def test_workspace_mount_from_config_dir_needs_no_extra_mount(config_in_subdir, monkeypatch):
+    pipeline, core, root = config_in_subdir
+    monkeypatch.chdir(root / "board")
+    monkeypatch.setattr(core, "WORKSPACE_MOUNT", "/workspace")
+    monkeypatch.setattr(pipeline, "MOUNT_CONFIG_DIR", True)
+    monkeypatch.setattr(pipeline, "CONFIG_PATH", ".hector.yaml")
+    pipeline.load_config_or_exit()
+    assert core.execution_dir() == "/workspace"
+    assert core.EXTRA_MOUNTS == []
 
 
 # ---- apply_docker_args ----
