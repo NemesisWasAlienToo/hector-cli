@@ -1,6 +1,7 @@
 # CI for the standalone hector CLI repo: lint + unit tests, no Docker/Renode needed.
 # The suite is pure-logic (see tests/) and depends only on pytest + the CLI's single
-# runtime dependency, pyyaml.
+# runtime dependency, pyyaml — plus setuptools, which test_version needs to exercise
+# setup.py and which python:3.12-slim no longer ships.
 stages: [check]
 
 python:
@@ -8,7 +9,7 @@ python:
   image: python:3.12-slim
   before_script:
     - pip install --upgrade pip
-    - pip install pytest ruff pyyaml
+    - pip install pytest ruff pyyaml setuptools
   script:
     - ruff check .
     - python -m pytest
