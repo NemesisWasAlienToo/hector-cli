@@ -1,5 +1,6 @@
 version: "0.1"
-renode: "1.16.1"
+renode:
+  image: "1.16.1"
 
 # Defines an STM32F103 entirely in YAML — no external .repl file.
 # Peripheral layout mirrors platforms/cpus/stm32f103.repl from the Renode tree.

@@ -124,7 +124,7 @@ and `hector` are all inside one container:
 ```bash
 cd cli
 docker build -t hector-renode .
-# match your project's `renode:` version:
+# match your project's `renode.image` version:
 docker build --build-arg RENODE_VERSION=1.16.1 -t hector-renode:1.16.1 .
 ```
 
@@ -175,17 +175,18 @@ the CLI natively with `pip` and let hector launch real per-step containers.
 | `hector run --gather-execution-metrics` | Enable Renode's CPU execution profiler for all machines |
 | `hector run --gather-execution-metrics boardA` | Enable profiler for one specific machine |
 | `hector run --gather-execution-metrics boardA --gather-execution-metrics boardB` | Enable profiler for selected machines |
-| `hector run --renode 1.16.1` | Override `renode:` from `.hector.yaml` with a version… |
-| `hector run --renode my-renode:dev` | …or with any (e.g. self-built) Renode Docker image |
-| `hector run --docker-args '-v /opt/tools:/opt/tools'` | Add extra flags (mounts, env, …) to every `docker run` |
+| `hector run --renode-image 1.16.1` | Override `renode.image` from `.hector.yaml` with a version… |
+| `hector run --renode-image my-renode:dev` | …or with any (e.g. self-built) Renode Docker image |
+| `hector run --renode-docker-flags '-v /opt/tools:/opt/tools'` | Add `docker run` flags (mounts, env, …) to the Renode containers |
 | `hector run --renode-dir /cache/renode` | Use/cache the Renode source checkout at this path (only fetched when needed) |
 | `hector run --renode-integration-dir /cache/integration` | Likewise for the verilator-integration checkout |
 | `hector run --no-docker` | Use locally installed `renode` / `renode-test` instead of Docker |
 | `hector run --workspace-mount /mnt` | Mount the hectorfile's folder at this container path and execute there |
 | `hector run --snapshot path/to/snapshot.save` | Load a snapshot instead of booting from the resc |
-| `hector run --snapshot snap.save --renode 1.16.1` | Load a snapshot without a `.hector.yaml` |
+| `hector run --snapshot snap.save --renode-image 1.16.1` | Load a snapshot without a `.hector.yaml` |
 | `hector test` | Run the [`prepare:`](#prepare) steps, then the `tests:` section; exit 1 on any failure |
 | `hector test --fail-fast` | Stop after the first failing test |
+| `hector test --skip-prepare` | Skip the [`prepare:`](#prepare) steps and reuse what an earlier run prepared (also on `run`) |
 | `hector test --test-file tests/boot.robot` | Run a specific `.robot` file instead of the YAML tests |
 | `hector test --test-name "Button press"` | Run only tests whose name contains the given substring |
 | `hector test --test-name "boot" --test-name "uart"` | Run tests matching any of the given names |
@@ -315,10 +316,10 @@ hector run --snapshot results/step_1_Linux_boots/snapshot.save
 hector test --snapshot results/step_1_Linux_boots/snapshot.save
 ```
 
-When used with `--renode`, no `.hector.yaml` is needed at all — useful for inspecting a snapshot outside of any project:
+When used with `--renode-image`, no `.hector.yaml` is needed at all — useful for inspecting a snapshot outside of any project:
 
 ```bash
-hector run --snapshot /path/to/snapshot.save --renode 1.16.1
+hector run --snapshot /path/to/snapshot.save --renode-image 1.16.1
 ```
 
 The CLI flag overrides any per-test `snapshot:` field in the YAML (see [tests](#tests)).
@@ -458,29 +459,54 @@ hector run --renode-args '--hide-log --config my.conf'
 
 Everything a hectorfile executes — `shell` tests, Renode and `renode-test` — runs **in the hectorfile's folder**, and paths written in the file (`firmware:`, `platform:`, module `source:`, test `file:` / `snapshot:`, `file:` mappings, `artifacts:`, paths inside scripts and `commands:`) are **relative to that folder**. So `hector test -f boards/nucleo/.hector.yaml` behaves the same as running `hector test` inside `boards/nucleo/`.
 
-The directory you run hector from is mounted into the container (at the same path), and the container's working directory (`-w`) is the hectorfile's folder. If the hectorfile lives **outside** the directory you run from (`hector test -f ../other/.hector.yaml`), its folder is mounted as well, at its own path. (With [`--workspace-mount`](#overriding-the-workspace-mount-path---workspace-mount) the hectorfile's folder is mounted at the given path instead.) A path like `../shared/board.repl` works as long as it lands inside one of those mounts — for anything else, add a mount with [`docker_args`](#extra-docker-flags---docker-args). Under `--no-docker` the processes simply run with the hectorfile's folder as their cwd.
+The directory you run hector from is mounted into the container (at the same path), and the container's working directory (`-w`) is the hectorfile's folder. If the hectorfile lives **outside** the directory you run from (`hector test -f ../other/.hector.yaml`), its folder is mounted as well, at its own path. (With [`--workspace-mount`](#overriding-the-workspace-mount-path---workspace-mount) the hectorfile's folder is mounted at the given path instead.) A path like `../shared/board.repl` works as long as it lands inside one of those mounts — for anything else, add a mount with [`docker-flags`](#extra-docker-flags-docker-flags). Under `--no-docker` the processes simply run with the hectorfile's folder as their cwd.
 
 **Relative `@paths` inside Renode.** The generated resc starts with `path add @<hectorfile's folder>`, so Renode looks up a relative `@path` in the hectorfile's folder first, then in its own install folder. That covers `platform:`/`firmware:`, your `resc:` and `commands:` lines (`sysbus LoadELF @fw/app.elf`, `include @scripts/setup.resc`) and `using "..."` inside `.repl` files — in `hector run` and in tests alike, even though renode-test starts Renode in its install folder. Paths that ship with Renode (`platforms/cpus/stm32f103.repl`) keep working, unless a file with the same relative path exists in the hectorfile's folder, which then takes precedence. Note that `$ORIGIN` is the generated resc's folder (`.hector/resc/`), not the hectorfile's.
 
 Paths given on the **command line** (`--output`, `--snapshot`, `--test-file`, `--artifacts`, `--renode-dir`, …) stay relative to where you run hector, and `.hector/` is still created there.
 
-#### Extra Docker flags (`--docker-args`)
+#### Extra Docker flags (`docker-flags`)
 
-Add your own flags to every `docker run` hector starts — Renode, robot tests, `shell` tests, `prepare:` steps with an `image:` and module builds — e.g. to mount more directories or set environment variables. Declare them in `.hector.yaml` as a string or a list:
+There are no flags for *every* container. Each container gets the flags declared on
+the thing it runs:
+
+- **`renode.docker-flags`** — the Renode containers: the emulation (`run`), robot tests
+  (renode-test), the background sim of `requires_sim: true`, and module builds.
+- **A `shell` test's or `prepare:` step's own `docker-flags:`** — that test's or step's
+  containers only (a `shell` test in the Renode image doesn't get the Renode flags).
+
+Each is a string or a list of strings:
 
 ```yaml
-docker_args:
-  - -v /opt/toolchains:/opt/toolchains:ro
-  - -e LICENSE_SERVER=10.0.0.5
+renode:
+  image: "1.16.1"
+  docker-flags:
+    - -v /opt/toolchains:/opt/toolchains:ro
+    - -e LICENSE_SERVER=10.0.0.5
+
+tests:
+  - name: Flash over USB
+    type: shell
+    image: python:3.12-slim
+    docker-flags: --device=/dev/ttyUSB0
+    script: python3 tools/flash.py /dev/ttyUSB0
 ```
 
-or pass them on the command line, where they are **appended** to the config's:
+`--renode-docker-flags` on the command line is **appended** to `renode.docker-flags`:
 
 ```bash
-hector test --docker-args '-v /data/firmware:/data/firmware'
+hector test --renode-docker-flags '-v /data/firmware:/data/firmware'
 ```
 
-Use absolute host paths for `-v` (Docker treats a bare name as a named volume). Ignored under `--no-docker`.
+Use absolute host paths for `-v` (Docker treats a bare name as a named volume). A
+prepare step without `image:` runs on the host, so `docker-flags:` there is an error, as
+it is on a robot test (use `renode.docker-flags`). Ignored under `--no-docker`, with a
+warning.
+
+> **Migration:** the top-level `docker_args:` reached every container and is now a
+> config error; `--docker-args` is gone. Move flags the Renode containers need to
+> `renode.docker-flags` and the rest to the `docker-flags:` of the test or step that
+> needs them.
 
 #### Container networking
 
@@ -488,7 +514,7 @@ Every container hector starts — the Renode emulation (`run`), robot tests, `sh
 
 #### Container user
 
-Containers run as **your UID:GID** (`-u`), so files they write into the project are yours, not root's. The image's own home folder belongs to its user (UID 1000 in the Renode image), so hector also sets `HOME=/tmp`. Without it, Renode can't create its user folder under any other UID and aborts at startup. To use a different home, set it in your docker args (`-e HOME=/some/dir`), and hector leaves it alone. Module builds run as root, and so does Renode when a mapping needs root (e.g. `tap`).
+Containers run as **your UID:GID** (`-u`), so files they write into the project are yours, not root's. The image's own home folder belongs to its user (UID 1000 in the Renode image), so hector also sets `HOME=/tmp`. Without it, Renode can't create its user folder under any other UID and aborts at startup. To use a different home, set it in that container's `docker-flags` (`-e HOME=/some/dir`), and hector leaves it alone. Module builds run as root, and so does Renode when a mapping needs root (e.g. `tap`).
 
 #### Running without Docker (`--no-docker`)
 
@@ -501,31 +527,37 @@ hector test --no-docker
 
 Requires `renode` and `renode-test` to be on your `PATH` — and, since images are ignored, whatever toolchains your `shell` scripts call (e.g. a compiler). **`--no-docker` and `--workspace-mount` are mutually exclusive** — they both control how the project root is made accessible and cannot be combined.
 
-#### Choosing Renode (`renode:` / `--renode`)
+#### Choosing Renode (`renode.image` / `--renode-image`)
 
-`renode:` is either a **version** or a **Docker image reference**:
+The `renode:` section names the Renode image and its container flags:
 
 ```yaml
-renode: "1.16.1"                            # → antmicro/renode:1.16.1
-renode: "ghcr.io/acme/renode:1.16.1-patched" # any image: a mirror, a nightly, your own
-renode: "my-renode:1.16.1"                  # even one a prepare step builds
+renode:
+  image: "1.16.1"                 # → antmicro/renode:1.16.1
+  docker-flags: -e FOO=1          # optional: see Extra Docker flags
 ```
 
-A value that looks like a version (`1.16.1`, `v1.16.1`) means the official image;
-anything else is used as the image. `--renode` overrides it without editing the file:
+`image:` is either a **version** (`1.16.1`, `v1.16.1` → the official
+`antmicro/renode` image) or any **Docker image reference**: a mirror, a nightly, your
+own build — even one a [prepare step](#prepare) builds, because the image is only used
+after the prepare steps (see [`examples/custom-renode-image`](examples/custom-renode-image)).
+
+```yaml
+renode:
+  image: "ghcr.io/acme/renode:1.16.1-patched"
+```
+
+`--renode-image` overrides it without editing the file:
 
 ```bash
-hector test --renode 1.15.0
-hector test --renode my-renode:dev
+hector test --renode-image 1.15.0
+hector test --renode-image my-renode:dev
 ```
-
-The image is only used after the [prepare steps](#prepare), so a prepare step can
-build it (see [`examples/custom-renode-image`](examples/custom-renode-image)).
 
 When combined with `--snapshot` in simulation mode, `.hector.yaml` is not required at all — the two flags together are self-contained:
 
 ```bash
-hector run --snapshot path/to/snapshot.save --renode 1.16.1
+hector run --snapshot path/to/snapshot.save --renode-image 1.16.1
 ```
 
 If a config needs the Renode source (see below), hector clones the tag matching the
@@ -533,9 +565,10 @@ version — for an image, taken from its tag when it looks like one (`…:1.16.1
 `…:v1.16.1`). So tag your own images with the Renode version they're based on, or
 point `--renode-dir` at a checkout.
 
-> **Migration:** `renode_version:` and `renode_image:` (and `--renode-version` /
-> `--renode-image`) were merged into `renode:` / `--renode`. The old keys are a config
-> error.
+> **Migration:** `renode` is a section: `renode: "1.16.1"` becomes `renode:` with
+> `image: "1.16.1"` under it. `renode_version:` / `renode_image:` and
+> `--renode-version` / `--renode` are replaced by `renode.image` / `--renode-image`.
+> The old forms are config errors.
 
 #### Renode source checkout
 
@@ -637,8 +670,7 @@ The configuration lives in `.hector.yaml`.
 | Field | Required | Description |
 |---|---|---|
 | `version` | No | Schema version (currently `"0.1"`). Warns if unrecognised. |
-| `renode` | Yes¹ | A Renode version (`1.16.1` → `antmicro/renode:1.16.1`) or any Docker image (e.g. `my-renode:1.16.1`). See [choosing Renode](#choosing-renode-renode----renode). |
-| `docker_args` | No | Extra `docker run` flags (string or list) for every container, e.g. more `-v` mounts. See [extra Docker flags](#extra-docker-flags---docker-args). |
+| `renode` | Yes¹ | Section: `image:` — a Renode version (`1.16.1` → `antmicro/renode:1.16.1`) or any Docker image; optional `docker-flags:` for the Renode containers. See [choosing Renode](#choosing-renode-renodeimage----renode-image) and [extra Docker flags](#extra-docker-flags-docker-flags). |
 | `arguments` | No | Scalar defaults, overridable by env var or `--set`. |
 | `matrix` | No | Cross-product job expansion. |
 | `modules` | No | Verilated / C# peripheral type definitions. |
@@ -651,7 +683,7 @@ The configuration lives in `.hector.yaml`.
 | `quantum` | No | Override the global time quantum (seconds). |
 | `ci` | No | CI pipeline definitions: when and how a CI server runs this config. |
 
-¹ Required, unless `--renode` is passed.
+¹ Required (with its `image:`), unless `--renode-image` is passed.
 
 ---
 
@@ -837,7 +869,7 @@ Either kind, once built, is a first-class Renode peripheral: connect it with
 and drive it from your [tests](#tests).
 
 > **Version note:** Renode's online docs track its latest release. If you pin an
-> older `renode:` version, cross-check against that release's docs/tag — the
+> older Renode version, cross-check against that release's docs/tag — the
 > co-simulation bus interface and some C# APIs evolve between versions.
 
 ---
@@ -1027,7 +1059,7 @@ other field. Worked examples:
 - [`examples/nucleo-h753zi`](examples/nucleo-h753zi) — the other side: a board that
   **is** shipped, loaded via `using` and *patched* inline, booting Hubris.
 - [`examples/custom-renode-image`](examples/custom-renode-image) — a prepare step
-  builds the Renode image that `renode:` names; the sim and tests then use it.
+  builds the Renode image that `renode.image` names; the sim and tests then use it.
 - [`examples/external-firmware-resc`](examples/external-firmware-resc) — firmware
   fetched by a `prepare:` step and loaded from `resc:` by a path relative to the
   hectorfile (`sysbus LoadELF @fw/button.elf`).
@@ -1157,7 +1189,7 @@ artifacts:
 ```
 
 Override the YAML list on the command line with `--artifacts` (repeatable); when given,
-it replaces the config value — same precedence as `--renode`:
+it replaces the config value — same precedence as `--renode-image`:
 
 ```bash
 hector test --artifacts 'results/*.bin' --artifacts 'logs/**/*.log'
@@ -1247,7 +1279,8 @@ image**: before module builds, the emulation and the tests. They run for `hector
 and `hector test` (not `export`).
 
 ```yaml
-renode: "my-renode:1.16.1"             # built below, used from then on
+renode:
+  image: "my-renode:1.16.1"            # built below, used from then on
 
 prepare:
   - name: Build the Renode image
@@ -1265,8 +1298,9 @@ machines:
     firmware: firmware/build/app.elf   # the prepare output, read straight back
 ```
 
-Each entry has the shape of a `shell` test (`name`, optional `image`, and `steps:` or a
-single-step `script:`), with two differences:
+Each entry has the shape of a `shell` test (`name`, optional `image` and
+[`docker-flags`](#extra-docker-flags-docker-flags), and `steps:` or a single-step
+`script:`), with two differences:
 
 - **No `image:` runs it on the host**, in the hectorfile's folder (a `shell` test
   without `image:` runs in the Renode image instead, which may not exist yet here).
@@ -1277,6 +1311,15 @@ Entries run in order and stop at the first failure, which also skips the emulati
 tests (exit 1). They share the bind-mounted project, so a file a prepare step writes is
 simply there afterwards. Each entry is reported like a test (`type: "prepare"`, with its
 own `report.html`). Under `--no-docker`, every entry runs on the host.
+
+Pass **`--skip-prepare`** to `hector run` or `hector test` to skip the prepare steps and
+reuse what an earlier run left behind — e.g. iterating on a test without re-fetching
+firmware or rebuilding the image:
+
+```bash
+hector test                          # prepares, then tests
+hector test --skip-prepare           # tests only, against the existing outputs
+```
 
 > **Migration:** the `build:` section was renamed to `prepare:` (`build:`/`setup:` are
 > now config errors). An entry without `image:` used to run in the Renode image; it now
@@ -1418,6 +1461,7 @@ Each step's `script` runs **inside a one-off Docker container** with the project
 ```
 
 - **`image:` is optional.** Omit it to use the run's renode image (which already has `python`/`wget`/shell tools) — hector logs which image it picked. Set it to pin a specific toolchain.
+- **`docker-flags:`** adds `docker run` flags (mounts, `--device`, env, …) to this test's containers only. See [extra Docker flags](#extra-docker-flags-docker-flags).
 - **`--no-docker`** runs the script on the host instead, ignoring `image:` (with a warning). See [Running without Docker](#running-without-docker---no-docker).
 
 ##### `requires_sim: true` — the emulation in the background
@@ -1438,7 +1482,8 @@ run the test **against a live emulation**:
 For such a test hector:
 
 1. starts Renode headless in the background (its own container, same image, mounts,
-   `docker_args` and host network as `hector run`; on the host under `--no-docker`),
+   `renode.docker-flags` and host network as `hector run`; on the host under
+   `--no-docker`),
 2. loads the generated resc through Renode's monitor and waits until it's done — a
    resc error (e.g. a missing ELF) fails the test before any step runs,
 3. runs the steps with **`HECTOR_MONITOR_PORT`** set to the monitor's TCP port,
@@ -1628,7 +1673,8 @@ its `status`, `duration`, `commands`, and relative paths to its detail artifacts
 
 ```yaml
 version: "0.1"
-renode: "1.16.1"
+renode:
+  image: "1.16.1"
 
 matrix:
   variables:

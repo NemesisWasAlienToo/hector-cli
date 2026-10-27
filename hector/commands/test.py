@@ -2,7 +2,7 @@
 """`hector test` — run the `tests:` section; exit 1 on any failure."""
 
 from .. import pipeline
-from .base import COMMANDS, Command, add_common_arguments
+from .base import COMMANDS, Command, add_common_arguments, add_prepare_argument
 
 
 @COMMANDS.register("test")
@@ -12,6 +12,7 @@ class TestCommand(Command):
 
     def add_arguments(self, parser):
         add_common_arguments(parser)
+        add_prepare_argument(parser)
         parser.add_argument(
             "--test-file", metavar="FILE", dest="test_file",
             help="Run a specific .robot file against the generated resc instead of the "

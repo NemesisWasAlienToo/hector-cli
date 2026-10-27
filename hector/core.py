@@ -14,6 +14,7 @@ import itertools
 import os
 import posixpath
 import re
+import shlex
 import subprocess
 from dataclasses import dataclass, field
 
@@ -67,7 +68,7 @@ class Registry:
 # ==========================================================================
 # CONSTANTS
 # ==========================================================================
-TOOL_VERSION = "0.9.0"
+TOOL_VERSION = "0.10.0"
 SUPPORTED_SCHEMA_VERSIONS = {"0.1"}
 
 RENODE_REPO_URL = "https://github.com/renode/renode.git"
@@ -83,12 +84,20 @@ WORKSPACE_MOUNT = "/workspace" if os.name == "nt" else os.getcwd()
 WORKSPACE_ROOT = None
 NO_DOCKER = False                 # when True, call renode/renode-test directly on host
 EXTRA_MOUNTS = []                  # dep dirs outside the workspace, bind-mounted 1:1 into every container
-DOCKER_ARGS = []                   # user flags (docker_args: + --docker-args) added to every `docker run`
+RENODE_DOCKER_FLAGS = []           # renode.docker-flags + --docker-flags, for the Renode-image containers
 # Host directory of the config file being executed. Paths written in the config resolve
 # against it, and scripts / Renode run with it as their working directory. None = cwd
 # (no config loaded, e.g. `run --snapshot` without one).
 CONFIG_DIR = None
 LIBOPENLIBM_NAME = "libopenlibm-Linux-x86_64.a"
+
+
+def parse_docker_flags(value):
+    """A `docker-flags:` value — a string or a list of strings — as a flat argv list."""
+    flags = []
+    for item in ([value] if isinstance(value, str) else value or []):
+        flags += shlex.split(str(item))
+    return flags
 
 DEFAULT_QUANTUM = "0.00001"        # 10 us; applied when any hub is present
 

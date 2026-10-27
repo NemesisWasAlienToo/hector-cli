@@ -49,7 +49,7 @@ def config_in_subdir(tmp_path, monkeypatch):
     monkeypatch.setattr(core, "WORKSPACE_ROOT", None)
     monkeypatch.setattr(pipeline, "MOUNT_CONFIG_DIR", False)
     (tmp_path / "board").mkdir()
-    (tmp_path / "board" / ".hector.yaml").write_text("renode: '1.16.1'\n")
+    (tmp_path / "board" / ".hector.yaml").write_text("renode:\n  image: '1.16.1'\n")
     return pipeline, core, tmp_path
 
 
@@ -65,7 +65,7 @@ def test_load_config_sets_config_dir(config_in_subdir, monkeypatch):
 def test_load_config_rejects_removed_build_section(config_in_subdir, monkeypatch, capsys):
     pipeline, core, root = config_in_subdir
     (root / "board" / ".hector.yaml").write_text(
-        "renode: '1.16.1'\nbuild:\n  - script: 'true'\n")
+        "renode:\n  image: '1.16.1'\nbuild:\n  - script: 'true'\n")
     monkeypatch.setattr(pipeline, "CONFIG_PATH", "board/.hector.yaml")
     with pytest.raises(SystemExit):
         pipeline.load_config_or_exit()
@@ -114,44 +114,48 @@ def test_workspace_mount_from_config_dir_needs_no_extra_mount(config_in_subdir, 
     assert core.EXTRA_MOUNTS == []
 
 
-# ---- apply_docker_args ----
+# ---- apply_renode_docker_flags ----
+
+def _renode(flags):
+    return {"renode": {"image": "1.16.1", "docker-flags": flags}}
+
 
 @pytest.mark.parametrize("cfg,flag,expected", [
     ({}, "", []),
-    ({"docker_args": "-v /a:/a -e X=1"}, "", ["-v", "/a:/a", "-e", "X=1"]),
-    ({"docker_args": ["-v /a:/a", "--env 'Y=two words'"]}, "",
+    (_renode("-v /a:/a -e X=1"), "", ["-v", "/a:/a", "-e", "X=1"]),
+    (_renode(["-v /a:/a", "--env 'Y=two words'"]), "",
      ["-v", "/a:/a", "--env", "Y=two words"]),
-    ({"docker_args": "-v /a:/a"}, "-v /b:/b", ["-v", "/a:/a", "-v", "/b:/b"]),  # flag appends
+    (_renode("-v /a:/a"), "-v /b:/b", ["-v", "/a:/a", "-v", "/b:/b"]),  # flag appends
 ])
-def test_apply_docker_args(monkeypatch, cfg, flag, expected):
+def test_apply_renode_docker_flags(monkeypatch, cfg, flag, expected):
     from hector import core, pipeline
-    monkeypatch.setattr(core, "DOCKER_ARGS", [])
+    monkeypatch.setattr(core, "RENODE_DOCKER_FLAGS", [])
     monkeypatch.setattr(core, "NO_DOCKER", False)
-    pipeline.apply_docker_args(cfg, SimpleNamespace(docker_args=flag))
-    assert core.DOCKER_ARGS == expected
+    pipeline.apply_renode_docker_flags(cfg, SimpleNamespace(renode_docker_flags=flag))
+    assert core.RENODE_DOCKER_FLAGS == expected
 
 
-@pytest.mark.parametrize("cfg,warns", [({"docker_args": "-v /a:/a"}, True), ({}, False)])
-def test_docker_args_warn_under_no_docker(monkeypatch, capsys, cfg, warns):
+@pytest.mark.parametrize("cfg,warns", [(_renode("-v /a:/a"), True), ({}, False)])
+def test_renode_docker_flags_warn_under_no_docker(monkeypatch, capsys, cfg, warns):
     from hector import core, pipeline
-    monkeypatch.setattr(core, "DOCKER_ARGS", [])
+    monkeypatch.setattr(core, "RENODE_DOCKER_FLAGS", [])
     monkeypatch.setattr(core, "NO_DOCKER", True)
-    pipeline.apply_docker_args(cfg, SimpleNamespace(docker_args=""))
-    assert ("[WARN] --no-docker: docker args '-v /a:/a' are ignored"
+    pipeline.apply_renode_docker_flags(cfg, SimpleNamespace(renode_docker_flags=""))
+    assert ("[WARN] --no-docker: renode docker flags '-v /a:/a' are ignored"
             in capsys.readouterr().out) == warns
 
 
 # ---- resolve_renode_image ----
 
 def test_image_from_config():
-    args = SimpleNamespace(renode=None)
-    tag, image = resolve_renode_image({"renode": "1.16.1"}, args)
+    args = SimpleNamespace(renode_image=None)
+    tag, image = resolve_renode_image({"renode": {"image": "1.16.1"}}, args)
     assert tag == "v1.16.1" and image == "antmicro/renode:1.16.1"
 
 
 def test_image_cli_overrides_config_and_strips_v():
-    args = SimpleNamespace(renode="v1.15.0")
-    tag, image = resolve_renode_image({"renode": "1.16.1"}, args)
+    args = SimpleNamespace(renode_image="v1.15.0")
+    tag, image = resolve_renode_image({"renode": {"image": "1.16.1"}}, args)
     assert tag == "v1.15.0" and image == "antmicro/renode:1.15.0"
 
 
@@ -162,12 +166,13 @@ def test_image_cli_overrides_config_and_strips_v():
     ("localhost:5000/renode", None),           # a registry port isn't an image tag
 ])
 def test_image_reference_is_used_as_is(value, tag):
-    assert resolve_renode_image({"renode": value}, SimpleNamespace(renode=None)) == (tag, value)
+    assert resolve_renode_image({"renode": {"image": value}},
+                                SimpleNamespace(renode_image=None)) == (tag, value)
 
 
 def test_image_missing_renode_raises():
-    with pytest.raises(ValueError, match="renode:"):
-        resolve_renode_image({}, SimpleNamespace(renode=None))
+    with pytest.raises(ValueError, match="renode.image"):
+        resolve_renode_image({}, SimpleNamespace(renode_image=None))
 
 
 # ---- _resolve_set_overrides ----
@@ -262,3 +267,12 @@ def test_filter_no_match_raises():
 def test_filter_bad_spec_raises():
     with pytest.raises(ValueError, match="not KEY=VALUE"):
         filter_jobs(JOBS, "BOARD")
+
+
+def test_load_config_rejects_the_renode_short_form(config_in_subdir, monkeypatch, capsys):
+    pipeline, core, root = config_in_subdir
+    (root / "board" / ".hector.yaml").write_text("renode: '1.16.1'\n")
+    monkeypatch.setattr(pipeline, "CONFIG_PATH", "board/.hector.yaml")
+    with pytest.raises(SystemExit):
+        pipeline.load_config_or_exit()
+    assert 'image: "1.16.1"' in capsys.readouterr().err

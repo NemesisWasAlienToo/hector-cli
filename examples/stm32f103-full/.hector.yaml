@@ -1,5 +1,6 @@
 version: "0.1"
-renode: "1.16.1"
+renode:
+  image: "1.16.1"
 
 # ===========================================================================
 # Blackpill board defined entirely in YAML.

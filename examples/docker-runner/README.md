@@ -13,8 +13,10 @@ docker-runner/
 What it shows:
 - A **`prepare:` step** (`python:3.12-slim`) writes `generated/values.txt` into the
   project before any test runs.
-- The two **`shell` tests** read that file back — proving one test's output is visible to the
-  next through the shared bind-mount, with no copying.
+- The two **`shell` tests** read that file back — proving the prepare step's output is
+  visible to them through the shared bind-mount, with no copying.
+- The first test sets **`docker-flags: -e EXPECTED_SUM=42`**: extra `docker run` flags for
+  that test's container only. `checks/verify.py` reads the expected sum from it.
 - No `machines:` block at all, because nothing needs Renode.
 
 ## Run
@@ -29,4 +31,4 @@ images are pulled. The prepare step and both tests should pass; results land in 
 `report.html` per test.
 
 To see it fail, change the `printf` in the prepare step so the values no longer sum to
-42 — `checks/verify.py` exits non-zero and the run exits 1.
+`EXPECTED_SUM` — `checks/verify.py` exits non-zero and the run exits 1.

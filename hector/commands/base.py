@@ -49,16 +49,18 @@ def add_common_arguments(parser):
              "and config defaults. Example: --set BIN=fw.elf --set BOARD=nucleo.",
     )
     parser.add_argument(
-        "--renode", metavar="VERSION|IMAGE", dest="renode",
-        help="Renode to use: a version (1.16.1 → antmicro/renode:1.16.1) or any Docker "
-             "image (e.g. a self-built my-renode:1.16.1). Overrides renode: from "
-             ".hector.yaml.",
+        "--renode-image", metavar="IMAGE", dest="renode_image",
+        help="The Renode image: a version (1.16.1 → antmicro/renode:1.16.1) or any "
+             "Docker image (e.g. a self-built my-renode:1.16.1). Overrides renode.image "
+             "from .hector.yaml.",
     )
     parser.add_argument(
-        "--docker-args", metavar="ARGS", dest="docker_args", default="",
-        help="Extra flags added to every `docker run` hector starts, e.g. more mounts "
-             "(--docker-args '-v /opt/tools:/opt/tools -e FOO=1'). Appended to "
-             "docker_args from .hector.yaml.",
+        "--renode-docker-flags", metavar="FLAGS", dest="renode_docker_flags", default="",
+        help="Extra `docker run` flags for the Renode containers (emulation, robot "
+             "tests, background sim, module builds), e.g. "
+             "--renode-docker-flags '-v /opt/tools:/opt/tools -e FOO=1'. Appended to "
+             "renode.docker-flags from .hector.yaml. Shell tests and prepare steps "
+             "take their own docker-flags: instead.",
     )
     parser.add_argument(
         "--renode-dir", metavar="PATH", dest="renode_dir", default=None,
@@ -107,6 +109,15 @@ def add_common_arguments(parser):
         "--workspace-mount", metavar="PATH", dest="workspace_mount", default=None,
         help="Mount the hectorfile's folder at this container path and execute there "
              "(default: everything is mounted at its own host path).",
+    )
+
+
+def add_prepare_argument(parser):
+    """--skip-prepare, for the commands that run the `prepare:` steps (run / test)."""
+    parser.add_argument(
+        "--skip-prepare", action="store_true", dest="skip_prepare",
+        help="Don't run the prepare: steps — reuse what an earlier run prepared "
+             "(firmware, the Renode image, ...).",
     )
 
 

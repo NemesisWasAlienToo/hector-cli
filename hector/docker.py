@@ -34,7 +34,7 @@ def _xdisplay_args():
             "-v", f"{xauth}:/home/developer/.Xauthority"]
 
 
-def _user_flags():
+def _user_flags(docker_flags=()):
     """Run the container as the host user, so files it writes into the bind-mounted
     workspace are owned by them on the host — not root. Used by the shell/build and
     renode-test containers.
@@ -46,7 +46,7 @@ def _user_flags():
 
     The image's HOME belongs to its own user (uid 1000 in the Renode image), so any
     other uid can't write there and Renode aborts at startup. HOME is pointed at /tmp
-    unless the user's docker args already set it.
+    unless the container's docker flags (docker_flags) already set it.
 
     No-op on Windows: there is no host uid to map, and Docker Desktop handles
     bind-mount ownership itself."""
@@ -54,7 +54,7 @@ def _user_flags():
     if not ids:
         return []
     flags = ["-u", f"{ids[0]}:{ids[1]}"]
-    if not any(a.startswith(("HOME=", "--env=HOME=")) for a in core.DOCKER_ARGS):
+    if not any(a.startswith(("HOME=", "--env=HOME=")) for a in docker_flags):
         flags += ["-e", "HOME=/tmp"]
     return flags
 
@@ -68,12 +68,12 @@ def _workspace_mount(workdir=None):
 
 def _extra_mounts():
     """Bind-mount out-of-tree dirs (the config's dir, a shared Renode source cache) 1:1,
-    so containers reach them at the same path they have on the host, then append the
-    user's own `docker run` flags (extra -v mounts, --env, ...). Empty for the common case."""
+    so containers reach them at the same path they have on the host. Empty for the
+    common case."""
     args = []
     for d in core.EXTRA_MOUNTS:
         args += ["-v", f"{d}:{d}"]
-    return args + core.DOCKER_ARGS
+    return args
 
 
 # Every container shares the host's network stack: GDB servers, tcp: mappings and
@@ -113,7 +113,8 @@ def run_build(script, image):
         return
     subprocess.run(
         ["docker", "run", "--rm", *_HOST_NETWORK, "-u", "0:0",
-         *_workspace_mount(), *_extra_mounts(), image, "bash", "-c", script],
+         *_workspace_mount(), *_extra_mounts(), *core.RENODE_DOCKER_FLAGS,
+         image, "bash", "-c", script],
         check=True,
     )
 
@@ -141,10 +142,11 @@ def resolve_shell_image(item, default_image, label="shell"):
     return image or default_image
 
 
-def run_in_container(script, image, live=False, env=None):
+def run_in_container(script, image, live=False, env=None, docker_flags=()):
     """Run a shell script with the project bind-mounted at the workspace path, returning
     (output, passed); streams when live=True. `set -ex` makes commands echo and the run
     fail on the first error. env: extra environment variables for the script.
+    docker_flags: the step's own `docker-flags:` (the Renode ones don't apply here).
 
     Backs the `shell` test type and `prepare:` steps. Normally a one-off container of
     `image`; with no image (a prepare step without `image:`) or under --no-docker the
@@ -159,7 +161,7 @@ def run_in_container(script, image, live=False, env=None):
     else:
         env_flags = [f for k, v in (env or {}).items() for f in ("-e", f"{k}={v}")]
         cmd = ["docker", "run", "--rm", *_HOST_NETWORK, *_workspace_mount(),
-               *_extra_mounts(), *_user_flags(), *env_flags,
+               *_extra_mounts(), *docker_flags, *_user_flags(docker_flags), *env_flags,
                image, "sh", "-c", f"set -ex\n{script}"]
     if live:
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, cwd=cwd, env=proc_env,
@@ -188,7 +190,8 @@ def build_renode_argv(resc_filename, image, extra_args=None, runtime=None):
     if core.NO_DOCKER:
         return ["renode", os.path.abspath(resc_filename)] + (extra_args or [])
     return ["docker", "run", "-it", "--rm", *_xdisplay_args(), *_HOST_NETWORK,
-            *_workspace_mount(), *_extra_mounts(), *_user_flags(), *_runtime_flags(runtime),
+            *_workspace_mount(), *_extra_mounts(), *core.RENODE_DOCKER_FLAGS,
+            *_user_flags(core.RENODE_DOCKER_FLAGS), *_runtime_flags(runtime),
             image, "renode", to_container_path(resc_filename)] + (extra_args or [])
 
 
@@ -235,7 +238,8 @@ class BackgroundRenode:
                                           stdout=self._log, stderr=subprocess.STDOUT)
         else:
             subprocess.run(["docker", "run", "-d", "--name", self.name, *_HOST_NETWORK,
-                            *_workspace_mount(), *_extra_mounts(), *_user_flags(),
+                            *_workspace_mount(), *_extra_mounts(), *core.RENODE_DOCKER_FLAGS,
+                            *_user_flags(core.RENODE_DOCKER_FLAGS),
                             *_runtime_flags(self.runtime), self.image, *argv],
                            check=True, stdout=subprocess.DEVNULL)
         try:
@@ -340,7 +344,8 @@ def run_renode_test(robot_file_host, image, results_dir_host,
     flags = ["-it"] if interactive else []
     display = _xdisplay_args() if interactive else []
     cmd = ["docker", "run", "--rm", *flags, *_HOST_NETWORK, *display,
-           *_workspace_mount(workdir=results_dir), *_extra_mounts(), *_user_flags(),
+           *_workspace_mount(workdir=results_dir), *_extra_mounts(),
+           *core.RENODE_DOCKER_FLAGS, *_user_flags(core.RENODE_DOCKER_FLAGS),
            *_runtime_flags(runtime),
            image, "renode-test", to_container_path(robot_file_host), "-r", results_dir]
     if resc_host_path:

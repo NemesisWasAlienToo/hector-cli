@@ -72,3 +72,15 @@ def test_export_has_no_start_but_test_does_not():
 
 def test_validate_accepts_file_flag():
     assert _parse(["validate", "-f", "board.yml"]).file == "board.yml"
+
+
+@pytest.mark.parametrize("cmd", ["run", "test"])
+def test_skip_prepare_flag(cmd):
+    assert _parse([cmd, "--skip-prepare"]).skip_prepare is True
+    assert _parse([cmd]).skip_prepare is False
+
+
+def test_export_has_no_skip_prepare():
+    # export never runs prepare, so the flag would be meaningless there.
+    with pytest.raises(SystemExit):
+        _parse(["export", "--skip-prepare"])

@@ -1,5 +1,6 @@
 version: "0.1"
-renode: "1.16.1"
+renode:
+  image: "1.16.1"
 
 # Versatile Express (ARM Cortex-A9, Linux) + STM32F103 (microcontroller).
 #

@@ -221,7 +221,17 @@ def _run_robot_test(test, steps, ctx, test_index):
     )]
 
 
-def _run_shell_steps(steps, image, live, env=None):
+def _step_docker_flags(item, name):
+    """A shell test's / prepare step's own `docker-flags:` as argv (ignored, with a
+    warning, under --no-docker)."""
+    flags = _core.parse_docker_flags(item.get("docker-flags"))
+    if flags and _core.NO_DOCKER:
+        print(f"[WARN] --no-docker: docker-flags '{shlex.join(flags)}' for '{name}' are "
+              "ignored; running on the host.")
+    return flags
+
+
+def _run_shell_steps(steps, image, live, env=None, docker_flags=()):
     """Run each step in a one-off container; returns (step_records, commands, stdout)."""
     step_records = []
     all_commands = []
@@ -232,7 +242,8 @@ def _run_shell_steps(steps, image, live, env=None):
         print(f"  {step_name}")
 
         t0 = time.monotonic()
-        stdout, passed = run_in_container(script, image, live, env=env)
+        stdout, passed = run_in_container(script, image, live, env=env,
+                                          docker_flags=docker_flags)
         duration = time.monotonic() - t0
 
         all_commands.extend(l for l in script.splitlines() if l.strip())
@@ -254,6 +265,7 @@ def _run_shell_test(test, steps, ctx, test_index):
     """
     test_name = test.get("name", f"test_{test_index}")
     image = resolve_shell_image(test, ctx.image, label=test_name)
+    docker_flags = _step_docker_flags(test, test_name)
     test_dir = _test_results_dir(ctx.results_dir, test_index, test_name)
     where = "host" if _core.NO_DOCKER else f"image: {image}"
     print(f"\n[TEST] {test_name}  (shell, {where})")
@@ -274,14 +286,16 @@ def _run_shell_test(test, steps, ctx, test_index):
                     sim.include(ctx.resc_host_path)
                 sim.release()
                 step_records, all_commands, combined_stdout = _run_shell_steps(
-                    steps, image, ctx.live, env={"HECTOR_MONITOR_PORT": sim.port})
+                    steps, image, ctx.live, env={"HECTOR_MONITOR_PORT": sim.port},
+                    docker_flags=docker_flags)
         except (RuntimeError, OSError, subprocess.CalledProcessError) as exc:
             print(f"  [SIM] failed to start the emulation: {exc}")
             step_records = [{"name": "start emulation", "passed": False,
                              "duration": time.monotonic() - t0, "output": str(exc)}]
             all_commands, combined_stdout = [], [str(exc)]
     else:
-        step_records, all_commands, combined_stdout = _run_shell_steps(steps, image, ctx.live)
+        step_records, all_commands, combined_stdout = _run_shell_steps(
+            steps, image, ctx.live, docker_flags=docker_flags)
 
     all_passed = all(r["passed"] for r in step_records)
     total_duration = sum(r["duration"] for r in step_records)
@@ -380,7 +394,8 @@ def run_prepare_steps(blocks, results_dir, live=False):
             print(f"  [WARN] --no-docker: image '{image}' is ignored; running on the host.")
 
         step_records, all_commands, combined_stdout = _run_shell_steps(
-            _normalize_steps(block), image, live)
+            _normalize_steps(block), image, live,
+            docker_flags=_step_docker_flags(block, name) if image else [])
         all_passed = all(r["passed"] for r in step_records)
         total_duration = sum(r["duration"] for r in step_records)
         slug = re.sub(r"[^\w-]", "_", name)[:40]

@@ -6,7 +6,8 @@ import sys
 
 _TEMPLATE = """\
 version: "0.1"
-renode: "{renode_version}"
+renode:
+  image: "{renode_version}"
 
 # arguments: scalar defaults, each overridable by an env var of the same name.
 arguments:

@@ -4,6 +4,26 @@ All notable changes to `hector-cli`. Versions follow [semver](https://semver.org
 while hector is 0.x, a minor version may contain breaking changes (marked
 **Breaking**).
 
+## 0.10.0 — 2026-10-27
+
+### Added
+- `--skip-prepare` on `hector run` and `hector test`: skip the `prepare:` steps and
+  reuse what an earlier run prepared.
+- `docker-flags:` on `shell` tests and `prepare:` steps (with an `image:`): extra
+  `docker run` flags (mounts, `--device`, env, …) for that test's or step's
+  containers only.
+- `renode.docker-flags` / `--renode-docker-flags`: flags for the Renode containers
+  only (the emulation, robot tests, the background sim, module builds).
+
+### Changed
+- **Breaking:** `renode` is a section: `renode:` with `image:` (a version or any Docker
+  image) and optional `docker-flags:` under it. The string form `renode: "1.16.1"` is
+  a config error that shows the fix. `--renode` is now `--renode-image`.
+- **Breaking:** the top-level `docker_args:` and `--docker-args`, which reached every
+  container, are removed; `docker_args:` is a config error pointing to
+  `renode.docker-flags` and the per-test/step `docker-flags:`.
+- `examples/docker-runner` passes its expected sum to a test through `docker-flags`.
+
 ## 0.9.0 — 2026-10-27
 
 ### Added

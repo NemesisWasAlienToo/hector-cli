@@ -2,7 +2,8 @@
 """`hector run` — boot the emulation interactively in the Renode monitor."""
 
 from .. import pipeline
-from .base import COMMANDS, Command, add_common_arguments, add_simulation_arguments
+from .base import (COMMANDS, Command, add_common_arguments, add_prepare_argument,
+                   add_simulation_arguments)
 
 
 @COMMANDS.register("run")
@@ -12,13 +13,14 @@ class RunCommand(Command):
 
     def add_arguments(self, parser):
         add_common_arguments(parser)
+        add_prepare_argument(parser)
         add_simulation_arguments(parser)
 
     def execute(self, args):
         pipeline.apply_global_flags(args)
 
         # Convenience fast path: a snapshot + pinned version/image needs no .hector.yaml.
-        if args.snapshot and args.renode:
+        if args.snapshot and args.renode_image:
             pipeline.snapshot_fastpath(args)
             return 0
 

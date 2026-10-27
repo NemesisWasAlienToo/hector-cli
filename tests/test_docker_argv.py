@@ -15,7 +15,7 @@ def clean_env(monkeypatch, tmp_path):
     monkeypatch.setattr(core, "EXTRA_MOUNTS", [])
     monkeypatch.setattr(core, "NO_DOCKER", False)
     monkeypatch.setattr(core, "CONFIG_DIR", None)
-    monkeypatch.setattr(core, "DOCKER_ARGS", [])
+    monkeypatch.setattr(core, "RENODE_DOCKER_FLAGS", [])
     # Neutralise X11 forwarding so argv is deterministic across hosts.
     monkeypatch.delenv("XAUTHORITY", raising=False)
     monkeypatch.delenv("HOME", raising=False)
@@ -53,8 +53,9 @@ def test_workdir_is_config_dir_mount_unchanged(monkeypatch, tmp_path):
     assert argv[argv.index("-w") + 1] == str(tmp_path / "sub")
 
 
-def test_user_docker_args_reach_every_container(monkeypatch):
-    monkeypatch.setattr(core, "DOCKER_ARGS", ["-v", "/opt/tools:/opt/tools", "-e", "FOO=1"])
+def test_renode_docker_flags_reach_only_renode_containers(monkeypatch):
+    monkeypatch.setattr(core, "RENODE_DOCKER_FLAGS",
+                        ["-v", "/opt/tools:/opt/tools", "-e", "FOO=1"])
     calls = []
 
     class _Proc:
@@ -64,13 +65,30 @@ def test_user_docker_args_reach_every_container(monkeypatch):
                         lambda cmd, **kw: calls.append(cmd) or _Proc())
     monkeypatch.setattr(docker.os, "makedirs", lambda *a, **kw: None)
     docker.run_build("true", "img")
-    docker.run_in_container("true", "img")
     docker.run_renode_test("t.robot", "img", "res")
     docker.run_renode("j.resc", "img")
     for cmd in calls:
         i = cmd.index("/opt/tools:/opt/tools")
         assert cmd[i - 1] == "-v" and cmd[i + 1:i + 3] == ["-e", "FOO=1"]
         assert i < cmd.index("img")             # flags must precede the image
+
+    calls.clear()
+    docker.run_in_container("true", "img")     # a shell step: not a Renode container
+    assert "/opt/tools:/opt/tools" not in calls[0]
+
+
+def test_shell_step_gets_only_its_own_docker_flags(monkeypatch):
+    monkeypatch.setattr(core, "RENODE_DOCKER_FLAGS", ["-e", "RENODE_ONLY=1"])
+    calls = []
+
+    class _Proc:
+        returncode, stdout = 0, ""
+
+    monkeypatch.setattr(docker.subprocess, "run",
+                        lambda cmd, **kw: calls.append(cmd) or _Proc())
+    docker.run_in_container("true", "img", docker_flags=["--device=/dev/ttyUSB0"])
+    assert "--device=/dev/ttyUSB0" in calls[0] and "RENODE_ONLY=1" not in calls[0]
+    assert calls[0].index("--device=/dev/ttyUSB0") < calls[0].index("img")
 
 
 def test_no_docker_steps_run_in_config_dir(monkeypatch, tmp_path):
@@ -172,10 +190,9 @@ def test_user_flags_maps_host_uid(monkeypatch):
     assert docker._user_flags() == ["-u", "1000:1000", "-e", "HOME=/tmp"]
 
 
-def test_user_flags_keep_a_home_from_docker_args(monkeypatch):
+def test_user_flags_keep_a_home_from_docker_flags(monkeypatch):
     monkeypatch.setattr(core, "host_uid_gid", lambda: (1234, 1234))
-    monkeypatch.setattr(core, "DOCKER_ARGS", ["-e", "HOME=/work/home"])
-    assert docker._user_flags() == ["-u", "1234:1234"]
+    assert docker._user_flags(["-e", "HOME=/work/home"]) == ["-u", "1234:1234"]
 
 
 def test_user_flags_empty_without_uid(monkeypatch):

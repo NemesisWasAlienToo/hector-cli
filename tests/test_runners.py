@@ -120,7 +120,7 @@ def shell_env(monkeypatch, tmp_path):
     steps_seen = []
     monkeypatch.setattr(runners, "BackgroundRenode", _FakeSim)
     monkeypatch.setattr(runners, "run_in_container",
-                        lambda script, image, live, env=None:
+                        lambda script, image, live, env=None, docker_flags=():
                         steps_seen.append(env) or ("ok", True))
     ctx = runners.RunnerContext(resc_host_path="job.resc", job_index=1, image="img")
     return runners, ctx, steps_seen
@@ -163,8 +163,9 @@ def prepare_env(monkeypatch, tmp_path):
     runs = []
     outcomes = iter([True, False, True])
     monkeypatch.setattr(runners, "run_in_container",
-                        lambda script, image, live, env=None:
-                        runs.append((script, image)) or ("out", next(outcomes)))
+                        lambda script, image, live, env=None, docker_flags=():
+                        runs.append((script, image, list(docker_flags)))
+                        or ("out", next(outcomes)))
     return runners, runs, str(tmp_path)
 
 
@@ -172,15 +173,29 @@ def test_prepare_runs_on_the_host_without_an_image(prepare_env):
     runners, runs, results_dir = prepare_env
     results = runners.run_prepare_steps(
         [{"name": "image", "script": "docker build -t r:1 ."}], results_dir)
-    assert runs == [("docker build -t r:1 .", None)]
+    assert runs == [("docker build -t r:1 .", None, [])]
     assert [(r.name, r.type, r.passed) for r in results] == [("image", "prepare", True)]
 
 
 def test_prepare_stops_at_the_first_failing_block(prepare_env):
     runners, runs, results_dir = prepare_env
     blocks = [{"name": "a", "script": "a"},
-              {"name": "b", "image": "alpine:3.19", "script": "b"},
+              {"name": "b", "image": "alpine:3.19", "script": "b", "docker-flags": "-e X=1"},
               {"name": "c", "script": "c"}]
     results = runners.run_prepare_steps(blocks, results_dir)
-    assert runs == [("a", None), ("b", "alpine:3.19")]
+    assert runs == [("a", None, []), ("b", "alpine:3.19", ["-e", "X=1"])]
     assert [r.passed for r in results] == [True, False]
+
+
+def test_shell_test_passes_its_own_docker_flags(monkeypatch, tmp_path):
+    from hector import runners
+    monkeypatch.chdir(tmp_path)
+    seen = []
+    monkeypatch.setattr(runners, "run_in_container",
+                        lambda script, image, live, env=None, docker_flags=():
+                        seen.append(list(docker_flags)) or ("ok", True))
+    ctx = runners.RunnerContext(resc_host_path=None, job_index=1, image="img")
+    test = {"name": "t", "type": "shell", "image": "alpine",
+            "docker-flags": ["--device=/dev/ttyUSB0", "-e X=1"]}
+    runners.run_tests([{**test, "steps": [{"name": "s", "script": "true"}]}], ctx)
+    assert seen == [["--device=/dev/ttyUSB0", "-e", "X=1"]]

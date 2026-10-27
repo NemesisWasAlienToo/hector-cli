@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """A tiny check executed *inside* the shell-test container, against the bind-mounted
-project. Reads generated/values.txt (produced by the build step), sums the numeric
-lines, and fails (non-zero exit) unless they total 42 — proving the build step's
-output is visible to the test."""
+project. Reads generated/values.txt (produced by the prepare step), sums the numeric
+lines, and fails (non-zero exit) unless they total $EXPECTED_SUM (set by the test's
+docker-flags) — proving the prepare step's output is visible to the test."""
+import os
 import sys
 
 
@@ -15,10 +16,11 @@ def main():
                 continue
             nums.append(int(line))
 
+    expected = int(os.environ["EXPECTED_SUM"])
     total = sum(nums)
     print(f"read {len(nums)} values, sum = {total}")
-    if total != 42:
-        print(f"FAIL: expected sum 42, got {total}", file=sys.stderr)
+    if total != expected:
+        print(f"FAIL: expected sum {expected}, got {total}", file=sys.stderr)
         sys.exit(1)
     print("PASS")
 

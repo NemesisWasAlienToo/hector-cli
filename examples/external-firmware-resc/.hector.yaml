@@ -1,5 +1,6 @@
 version: "0.1"
-renode: "1.16.1"
+renode:
+  image: "1.16.1"
 
 # Firmware that comes from OUTSIDE the generated resc: a prepare step downloads it next
 # to this file, and the machine's `resc:` loads it by a path relative to this file -

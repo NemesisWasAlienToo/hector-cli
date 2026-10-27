@@ -40,20 +40,31 @@ def test_missing_renode_is_error():
 
 
 @pytest.mark.parametrize("value", ["1.16.1", "my-renode:dev", "ghcr.io/me/renode:1.16.1"])
-def test_renode_accepts_a_version_or_an_image(value):
-    errors, _ = validate_config({"renode": value})
+def test_renode_image_accepts_a_version_or_an_image(value):
+    errors, _ = validate_config({"renode": {"image": value}})
     assert errors == []
+
+
+def test_renode_short_form_is_error():
+    errors, _ = validate_config({"renode": "1.16.1"})
+    assert [e.path for e in errors] == ["renode"]
+    assert 'image: "1.16.1"' in errors[0].message
+
+
+def test_renode_needs_an_image():
+    errors, _ = validate_config({"renode": {"docker-flags": "-e X=1"}})
+    assert [e.path for e in errors] == ["renode.image"]
 
 
 @pytest.mark.parametrize("key", ["renode_version", "renode_image"])
 def test_old_renode_keys_are_errors(key):
     errors, _ = validate_config({key: "1.16.1"})
     assert [e.path for e in errors] == [key]
-    assert "renode:" in errors[0].message
+    assert "renode.image" in errors[0].message
 
 
 def test_prepare_steps_validate_like_shell_steps():
-    errors, warnings = validate_config({"renode": "1.16.1", "prepare": [
+    errors, warnings = validate_config({"renode": {"image": "1.16.1"}, "prepare": [
         {"name": "img", "script": "docker build -t r:1 ."},
         {"name": "fw", "image": "alpine:3.19", "steps": [{"name": "s", "script": "true"}]},
     ]})
@@ -62,31 +73,48 @@ def test_prepare_steps_validate_like_shell_steps():
 
 @pytest.mark.parametrize("key", ["requires_sim", "type"])
 def test_prepare_steps_cannot_start_the_sim(key):
-    errors, _ = validate_config({"renode": "1.16.1",
+    errors, _ = validate_config({"renode": {"image": "1.16.1"},
                                  "prepare": [{"name": "x", "script": "true", key: True}]})
     assert [e.path for e in errors] == [f"prepare[0].{key}"]
 
 
 @pytest.mark.parametrize("value", ["-v /a:/a", ["-v /a:/a", "-e X=1"]])
-def test_docker_args_accepts_string_or_list(value):
-    errors, warnings = validate_config({"renode": "1.16.1", "docker_args": value})
-    assert errors == [] and not any(w.path == "docker_args" for w in warnings)
+def test_docker_flags_accept_string_or_list(value):
+    errors, warnings = validate_config({
+        "renode": {"image": "1.16.1", "docker-flags": value},
+        "prepare": [{"name": "p", "image": "alpine", "script": "true", "docker-flags": value}],
+        "tests": [{"name": "t", "type": "shell", "script": "true", "docker-flags": value}]})
+    assert errors == [] and warnings == []
 
 
-def test_docker_args_wrong_type_is_error():
-    errors, _ = validate_config({"renode": "1.16.1", "docker_args": {"v": "/a"}})
-    assert any(i.path == "docker_args" for i in errors)
+def test_docker_flags_wrong_type_is_error():
+    errors, _ = validate_config({"renode": {"image": "1.16.1", "docker-flags": {"v": "/a"}}})
+    assert [e.path for e in errors] == ["renode.docker-flags"]
+
+
+def test_global_docker_args_is_error():
+    errors, _ = validate_config({"renode": {"image": "1.16.1"}, "docker_args": "-v /a:/a"})
+    assert [e.path for e in errors] == ["docker_args"]
+    assert "renode.docker-flags" in errors[0].message
+
+
+def test_docker_flags_need_a_container():
+    errors, _ = validate_config({
+        "renode": {"image": "1.16.1"},
+        "prepare": [{"name": "host", "script": "true", "docker-flags": "-e X=1"}],
+        "tests": [{"name": "r", "type": "robot", "script": "x", "docker-flags": "-e X=1"}]})
+    assert [e.path for e in errors] == ["prepare[0].docker-flags", "tests[0].docker-flags"]
 
 
 def test_unknown_module_kind_is_error():
-    cfg = {"renode": "1.16.1",
+    cfg = {"renode": {"image": "1.16.1"},
            "modules": {"u": {"kind": "bogus", "type": "X", "source": "s"}}}
     errors, _ = validate_config(cfg)
     assert any(i.path == "modules.u.kind" for i in errors)
 
 
 def test_module_missing_type_is_error():
-    cfg = {"renode": "1.16.1", "modules": {"u": {"kind": "csharp", "source": "s.dll"}}}
+    cfg = {"renode": {"image": "1.16.1"}, "modules": {"u": {"kind": "csharp", "source": "s.dll"}}}
     errors, _ = validate_config(cfg)
     assert any(i.path == "modules.u.type" for i in errors)
 
@@ -94,7 +122,7 @@ def test_module_missing_type_is_error():
 # ---- top-level keys ----
 
 def _base(**extra):
-    cfg = {"renode": "1.16.1"}
+    cfg = {"renode": {"image": "1.16.1"}}
     cfg.update(extra)
     return cfg
 

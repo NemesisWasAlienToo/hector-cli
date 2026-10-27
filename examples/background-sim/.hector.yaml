@@ -1,5 +1,6 @@
 version: "0.1"
-renode: "1.16.1"
+renode:
+  image: "1.16.1"
 
 # A `shell` test with `requires_sim: true` gets the emulation running in the
 # background for the whole test. Its steps reach it over the host network: Renode's

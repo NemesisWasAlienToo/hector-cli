@@ -112,6 +112,11 @@ def load_config_or_exit():
         print(f"[ERROR] '{config_path}': '{removed[0]}:' — {REMOVED_TOP_KEYS[removed[0]]}",
               file=sys.stderr)
         sys.exit(1)
+    try:
+        renode_image_field(config.get("renode"))
+    except ValueError as exc:
+        print(f"[ERROR] '{config_path}': {exc}", file=sys.stderr)
+        sys.exit(1)
     v = config.get("version")
     if v is not None and str(v) not in SUPPORTED_SCHEMA_VERSIONS:
         print(f"[WARN] .hector.yaml 'version: {v}' is not in supported versions "
@@ -143,15 +148,15 @@ def resolve_renode_image(config, args):
     """Pick the Renode Docker image and the git tag of the matching source; return
     (git_tag, docker_image).
 
-    `renode:` (or --renode, which wins) is either a version — `1.16.1` means
+    `renode.image` (--renode-image wins) is either a version — `1.16.1` means
     `antmicro/renode:1.16.1` — or any Docker image reference, including one a prepare
     step builds. The git tag (only used to clone the Renode source) comes from the
     version, or from the image tag when it looks like one; it is None when neither
     tells us, and only matters if the config needs the source."""
-    renode = getattr(args, "renode", None) or config.get("renode")
+    renode = getattr(args, "renode_image", None) or renode_image_field(config.get("renode"))
     if not renode:
-        raise ValueError("Top-level 'renode:' is required — a version (e.g. '1.16.1') or "
-                         "a Docker image — or pass --renode on the command line.")
+        raise ValueError("'renode.image' is required — a version (e.g. '1.16.1') or a "
+                         "Docker image — or pass --renode-image on the command line.")
     renode = str(renode).strip()
     if _VERSION_TAG_RE.match(renode):
         normalized = renode.lstrip("v")
@@ -160,17 +165,27 @@ def resolve_renode_image(config, args):
     return (f"v{tag.lstrip('v')}" if _VERSION_TAG_RE.match(tag) else None), renode
 
 
-def apply_docker_args(config, args):
-    """Collect the user's extra `docker run` flags — the config's `docker_args:` (a
-    string or a list of strings) followed by --docker-args — into core.DOCKER_ARGS."""
-    raw = config.get("docker_args") or []
-    flags = []
-    for item in ([raw] if isinstance(raw, str) else raw):
-        flags += shlex.split(str(item))
-    _core.DOCKER_ARGS = flags + shlex.split(getattr(args, "docker_args", "") or "")
-    if _core.NO_DOCKER and _core.DOCKER_ARGS:
-        print(f"[WARN] --no-docker: docker args '{shlex.join(_core.DOCKER_ARGS)}' are "
-              "ignored; running on the host.")
+def renode_image_field(renode):
+    """The `image:` of the `renode:` section (None when there's no section)."""
+    if renode is None:
+        return None
+    if not isinstance(renode, dict):
+        raise ValueError(f"'renode:' must be a section, not {renode!r} — write "
+                         f"`renode:` with `image: \"{renode}\"` under it.")
+    return renode.get("image")
+
+
+def apply_renode_docker_flags(config, args):
+    """Collect the extra `docker run` flags for the Renode-image containers (the
+    emulation, renode-test, the background sim, module builds) — `renode.docker-flags`
+    followed by --renode-docker-flags — into core.RENODE_DOCKER_FLAGS. Shell tests and
+    prepare steps take their own `docker-flags:` instead."""
+    renode = config.get("renode")
+    flags = _core.parse_docker_flags(renode.get("docker-flags") if isinstance(renode, dict) else None)
+    _core.RENODE_DOCKER_FLAGS = flags + shlex.split(getattr(args, "renode_docker_flags", "") or "")
+    if _core.NO_DOCKER and _core.RENODE_DOCKER_FLAGS:
+        print(f"[WARN] --no-docker: renode docker flags "
+              f"'{shlex.join(_core.RENODE_DOCKER_FLAGS)}' are ignored; running on the host.")
 
 
 def _resolve_set_overrides(args):
@@ -201,7 +216,7 @@ def build_job_config(action, config, args, *, test_mode=False):
     """Assemble a JobConfig from parsed args — the shared run / test / export path:
     pin the image, prepare the framework (lazily), resolve arguments + artifacts."""
     git_tag, docker_image = resolve_renode_image(config, args)
-    apply_docker_args(config, args)
+    apply_renode_docker_flags(config, args)
 
     # Clone Renode only when the config actually needs the source; otherwise skip it
     # entirely (a ~200 MB clone) and leave the framework vars empty.
@@ -248,6 +263,7 @@ def build_job_config(action, config, args, *, test_mode=False):
         fail_fast=getattr(args, "fail_fast", False),
         snapshot=getattr(args, "snapshot", None),
         no_start=getattr(args, "no_start", False),
+        skip_prepare=getattr(args, "skip_prepare", False),
         output_dir=getattr(args, "output", "results"),
         gather_metrics=getattr(args, "gather_execution_metrics", None),
         artifacts=artifacts_cfg,
@@ -279,13 +295,13 @@ def execute_jobs(cfg, args):
 
 
 def snapshot_fastpath(args):
-    """`run --snapshot --renode VERSION|IMAGE` with no .hector.yaml: write a
+    """`run --snapshot --renode-image IMAGE` with no .hector.yaml: write a
     snapshot loader resc and boot it directly, skipping config/dependency machinery."""
     if not os.path.isfile(args.snapshot):
         print(f"[ERROR] Snapshot not found: {args.snapshot}", file=sys.stderr)
         sys.exit(1)
     _, docker_image = resolve_renode_image({}, args)
-    apply_docker_args({}, args)
+    apply_renode_docker_flags({}, args)
     resc_root = os.path.join(ARTIFACTS_DIR, "resc")
     os.makedirs(resc_root, exist_ok=True)
     # No .hector.yaml here, so debug machine names come straight from --debug.
@@ -527,6 +543,7 @@ class JobConfig:
     fail_fast: bool = False
     snapshot: str = None
     no_start: bool = False
+    skip_prepare: bool = False
     output_dir: str = "results"
     gather_metrics: list = None
     artifacts: list = field(default_factory=list)
@@ -640,10 +657,12 @@ def run_job(i, total_jobs, job_context, cfg):
         # ---- PHASE 0: prepare ----
         # Before anything touches the Renode image (module builds, the sim, tests): a
         # prepare step may build that image, or the firmware the machines load. Not for
-        # `export`, which only prints the commands. A failure skips the rest of the job
-        # but is still reported, like a test.
+        # `export`, which only prints the commands, nor with --skip-prepare. A failure
+        # skips the rest of the job but is still reported, like a test.
         prepare_results = []
-        if cfg.action is not action_export:
+        if cfg.skip_prepare and cfg.config.get("prepare"):
+            print("\n[PREPARE] skipped (--skip-prepare).")
+        elif cfg.action is not action_export:
             prepare_blocks = interpolate(copy.deepcopy(cfg.config.get("prepare", [])), context)
             prepare_results = run_prepare_steps(prepare_blocks, cfg.output_dir, live=cfg.live)
         if not all(r.passed for r in prepare_results):

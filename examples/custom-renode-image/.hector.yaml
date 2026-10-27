@@ -2,7 +2,8 @@ version: "0.1"
 
 # The Renode image is built by a prepare step, then used for everything after it. The
 # version in the tag also tells hector which Renode source matches, if it ever needs it.
-renode: "hector-example-renode:1.16.1"
+renode:
+  image: "hector-example-renode:1.16.1"
 
 prepare:
   # No `image:` → runs on the host, where `docker build` is available. Docker's cache

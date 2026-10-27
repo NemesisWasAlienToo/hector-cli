@@ -28,7 +28,7 @@ _TRIGGER_TOP_KEYS = {"when", "cron", "reporters", "jobs", "fail_fast", "timeout"
 
 # Top-level keys defined by this schema version; anything else is flagged.
 _KNOWN_TOP_KEYS = {
-    "version", "renode", "docker_args", "arguments", "matrix",
+    "version", "renode", "arguments", "matrix",
     "modules", "hubs", "machines", "connections", "mappings", "prepare", "tests", "quantum",
     "artifacts",
 } | _TRIGGER_TOP_KEYS
@@ -39,10 +39,14 @@ _RENAMED_TOP_KEYS = {"nodes": "machines"}
 # Removed top-level keys: an error, since silently skipping them (e.g. a firmware
 # fetch, or the Renode image) would make the run fail later for a confusing reason.
 _BUILD_RENAMED = "The 'build:' section was renamed to 'prepare:' — rename the key."
-_RENODE_MERGED = ("'renode_version:' and 'renode_image:' were merged into 'renode:' — a "
-                  "version ('1.16.1') or any Docker image ('my-renode:1.16.1').")
+_RENODE_MERGED = ("'renode_version:' and 'renode_image:' were merged into 'renode.image' "
+                  "— a version ('1.16.1') or any Docker image ('my-renode:1.16.1').")
+_DOCKER_ARGS_MOVED = ("'docker_args:' was removed: it reached every container. Put flags "
+                      "for the Renode containers in 'renode.docker-flags', and a shell "
+                      "test's or prepare step's own flags in its 'docker-flags:'.")
 REMOVED_TOP_KEYS = {"build": _BUILD_RENAMED, "setup": _BUILD_RENAMED,
-                    "renode_version": _RENODE_MERGED, "renode_image": _RENODE_MERGED}
+                    "renode_version": _RENODE_MERGED, "renode_image": _RENODE_MERGED,
+                    "docker_args": _DOCKER_ARGS_MOVED}
 
 # Test types renamed this schema version → current name (old configs still run).
 _RENAMED_TEST_TYPES = {"bash": "shell", "docker": "shell"}
@@ -88,22 +92,26 @@ def validate_config(config) -> Tuple[List[Issue], List[Issue]]:
                  f"({', '.join(sorted(SUPPORTED_SCHEMA_VERSIONS))}). "
                  "Some fields may not be recognised.")
 
-    # ---- renode: a version or a Docker image reference ----
+    # ---- renode: { image, docker-flags } ----
     renode = config.get("renode")
     if renode is None:
         if not any(k in config for k in ("renode_version", "renode_image")):
-            err("renode", "Required field missing — a Renode version (e.g. '1.16.1') or "
-                "a Docker image (e.g. 'my-renode:1.16.1').")
-    elif not isinstance(renode, str) or not renode.strip():
-        err("renode", "Must be a quoted string: a version like '1.16.1' or an image like "
-            f"'my-renode:1.16.1', got {renode!r}.")
-
-    # ---- docker_args ----
-    da = config.get("docker_args")
-    if da is not None and not (isinstance(da, str) or
-                               (isinstance(da, list) and all(isinstance(x, str) for x in da))):
-        err("docker_args", "Must be a string or a list of strings "
-            "(e.g. ['-v /opt/tools:/opt/tools', '-e FOO=1']).")
+            err("renode", "Required section missing — `renode:` with `image:` under it "
+                "(a version like '1.16.1' or an image like 'my-renode:1.16.1').")
+    elif not isinstance(renode, dict):
+        err("renode", f"Must be a section, not {renode!r} — write `renode:` with "
+            f"`image: \"{renode}\"` under it.")
+    else:
+        image = renode.get("image")
+        if image is None:
+            err("renode.image", "Required — a version like '1.16.1' or an image like "
+                "'my-renode:1.16.1'.")
+        elif not isinstance(image, str) or not image.strip():
+            err("renode.image", f"Must be a quoted string, got {image!r}.")
+        _validate_docker_flags(renode, "renode", err)
+        for k in renode:
+            if k not in ("image", "docker-flags"):
+                warn(f"renode.{k}", f"Unknown key '{k}' — known: image, docker-flags.")
 
     # ---- unknown / renamed top-level keys ----
     for k in config:
@@ -272,6 +280,10 @@ def validate_config(config) -> Tuple[List[Issue], List[Issue]]:
                     continue
                 if block.get("image") is not None and not isinstance(block.get("image"), str):
                     err(f"{bp}.image", "If set, 'image' must be a string (e.g. 'arm-gcc:13').")
+                _validate_docker_flags(block, bp, err)
+                if "docker-flags" in block and not block.get("image"):
+                    err(f"{bp}.docker-flags", "Only applies to a step with an 'image:' "
+                        "(without one, it runs on the host).")
                 if "requires_sim" in block or "type" in block:
                     key = "requires_sim" if "requires_sim" in block else "type"
                     err(f"{bp}.{key}", "Prepare steps are shell steps that run before the "
@@ -300,6 +312,10 @@ def validate_config(config) -> Tuple[List[Issue], List[Issue]]:
                     f"Available: {', '.join(sorted(TEST_RUNNERS.keys()))}.")
             if "requires_sim" in test and not isinstance(test["requires_sim"], bool):
                 err(f"{p}.requires_sim", "Must be true or false.")
+            _validate_docker_flags(test, p, err)
+            if rtype == "robot" and "docker-flags" in test:
+                err(f"{p}.docker-flags", "robot tests run in the Renode container; set its "
+                    "flags in 'renode.docker-flags'.")
             if rtype == "robot" and test.get("requires_sim") is False:
                 warn(f"{p}.requires_sim", "robot tests always need the simulation; "
                      "'requires_sim: false' is ignored.")
@@ -350,6 +366,14 @@ def _validate_shell_steps(item, p, err, warn):
             warn(p, "No 'steps', 'script', or 'file' — it will do nothing.")
         if item.get("file") and item.get("script"):
             warn(p, "Both 'file' and 'script' — 'file' takes precedence.")
+
+
+def _validate_docker_flags(item, path, err):
+    flags = item.get("docker-flags")
+    if flags is not None and not (isinstance(flags, str) or (
+            isinstance(flags, list) and all(isinstance(x, str) for x in flags))):
+        err(f"{path}.docker-flags", "Must be a string or a list of strings "
+            "(e.g. ['-v /opt/tools:/opt/tools', '-e FOO=1']).")
 
 
 def _validate_connection_lines(section, path, err, warn):
