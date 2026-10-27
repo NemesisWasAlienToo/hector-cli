@@ -196,3 +196,17 @@ def test_shell_image_falls_back_to_default():
 def test_shell_image_no_docker_uses_default(monkeypatch):
     monkeypatch.setattr(core, "NO_DOCKER", True)
     assert docker.resolve_shell_image({"image": "alpine"}, "default:img") == "alpine"
+
+
+def test_no_image_runs_the_script_on_the_host(monkeypatch, tmp_path):
+    # A prepare step without `image:` runs on the host, e.g. to `docker build`.
+    monkeypatch.setattr(core, "CONFIG_DIR", str(tmp_path))
+    calls = []
+
+    class _Proc:
+        returncode, stdout = 0, ""
+
+    monkeypatch.setattr(docker.subprocess, "run",
+                        lambda cmd, **kw: calls.append((cmd, kw["cwd"])) or _Proc())
+    docker.run_in_container("docker build -t r:1 .", None)
+    assert calls == [(["bash", "-c", "set -ex\ndocker build -t r:1 ."], str(tmp_path))]

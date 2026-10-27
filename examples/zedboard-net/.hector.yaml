@@ -1,5 +1,5 @@
 version: "0.1"
-renode_version: "1.16.1"
+renode: "1.16.1"
 
 # ===========================================================================
 # Zedboard (Zynq-7000) running Linux with working Ethernet, bridged to the HOST

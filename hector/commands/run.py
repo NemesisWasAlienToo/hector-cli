@@ -18,7 +18,7 @@ class RunCommand(Command):
         pipeline.apply_global_flags(args)
 
         # Convenience fast path: a snapshot + pinned version/image needs no .hector.yaml.
-        if args.snapshot and (args.renode_version or args.renode_image):
+        if args.snapshot and args.renode:
             pipeline.snapshot_fastpath(args)
             return 0
 

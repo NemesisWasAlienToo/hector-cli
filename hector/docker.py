@@ -146,12 +146,13 @@ def run_in_container(script, image, live=False, env=None):
     (output, passed); streams when live=True. `set -ex` makes commands echo and the run
     fail on the first error. env: extra environment variables for the script.
 
-    Backs the `shell` test type. Normally a one-off container of
-    `image`; under --no-docker the script runs directly on the host (the image is moot).
-    Either way it runs in the config's directory (core.execution_dir)."""
+    Backs the `shell` test type and `prepare:` steps. Normally a one-off container of
+    `image`; with no image (a prepare step without `image:`) or under --no-docker the
+    script runs directly on the host. Either way it runs in the config's directory
+    (core.execution_dir)."""
     cwd = None
     proc_env = None
-    if core.NO_DOCKER:
+    if core.NO_DOCKER or not image:
         cmd = ["bash", "-c", f"set -ex\n{script}"]
         cwd = core.execution_dir()
         proc_env = {**os.environ, **env} if env else None

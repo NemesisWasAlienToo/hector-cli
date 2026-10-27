@@ -1,6 +1,6 @@
 # Firmware loaded from `resc:`
 
-The firmware comes from **outside** the generated resc: the first test (`type: shell`)
+The firmware comes from **outside** the generated resc: a `prepare:` step
 downloads it into `fw/` next to `.hector.yaml`, and the machine's `resc:` loads it itself with a
 path relative to the hectorfile:
 
@@ -30,7 +30,7 @@ which puts the hectorfile's folder first in Renode's search path. The same line 
 
 ```bash
 hector test        # fetches the ELF, boots it, checks its symbols are loaded
-hector run         # interactive Renode monitor (needs fw/ from a `hector test` run)
+hector run         # fetches the ELF, then the interactive Renode monitor
 ```
 
 `fw/`, `.hector/` and `results/` are generated; don't commit them.

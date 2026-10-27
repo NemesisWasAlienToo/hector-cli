@@ -28,20 +28,21 @@ _TRIGGER_TOP_KEYS = {"when", "cron", "reporters", "jobs", "fail_fast", "timeout"
 
 # Top-level keys defined by this schema version; anything else is flagged.
 _KNOWN_TOP_KEYS = {
-    "version", "renode_version", "renode_image", "docker_args", "arguments", "matrix",
-    "modules", "hubs", "machines", "connections", "mappings", "tests", "quantum",
+    "version", "renode", "docker_args", "arguments", "matrix",
+    "modules", "hubs", "machines", "connections", "mappings", "prepare", "tests", "quantum",
     "artifacts",
 } | _TRIGGER_TOP_KEYS
 
 # Keys renamed in this schema version → new name (for a helpful migration hint).
 _RENAMED_TOP_KEYS = {"nodes": "machines"}
 
-# Removed top-level sections: an error, since silently skipping them (e.g. a firmware
-# fetch) would make every later test fail for a confusing reason.
-_BUILD_REMOVED = ("The 'build:' section was removed — move each entry into 'tests:' as a "
-                  "`type: shell` test (tests run in order, so put it first).")
-REMOVED_TOP_KEYS = {"build": _BUILD_REMOVED, "setup": _BUILD_REMOVED,
-                     "prepare": _BUILD_REMOVED}
+# Removed top-level keys: an error, since silently skipping them (e.g. a firmware
+# fetch, or the Renode image) would make the run fail later for a confusing reason.
+_BUILD_RENAMED = "The 'build:' section was renamed to 'prepare:' — rename the key."
+_RENODE_MERGED = ("'renode_version:' and 'renode_image:' were merged into 'renode:' — a "
+                  "version ('1.16.1') or any Docker image ('my-renode:1.16.1').")
+REMOVED_TOP_KEYS = {"build": _BUILD_RENAMED, "setup": _BUILD_RENAMED,
+                    "renode_version": _RENODE_MERGED, "renode_image": _RENODE_MERGED}
 
 # Test types renamed this schema version → current name (old configs still run).
 _RENAMED_TEST_TYPES = {"bash": "shell", "docker": "shell"}
@@ -87,16 +88,15 @@ def validate_config(config) -> Tuple[List[Issue], List[Issue]]:
                  f"({', '.join(sorted(SUPPORTED_SCHEMA_VERSIONS))}). "
                  "Some fields may not be recognised.")
 
-    # ---- renode_version / renode_image (one of them required) ----
-    rv = config.get("renode_version")
-    ri = config.get("renode_image")
-    if not rv and not ri:
-        err("renode_version", "Required field missing (e.g. '1.16.1') — or set "
-            "'renode_image' to use a specific Docker image.")
-    if rv and not isinstance(rv, (str, int, float)):
-        err("renode_version", f"Must be a string like '1.16.1', got {type(rv).__name__}.")
-    if ri and not isinstance(ri, str):
-        err("renode_image", f"Must be a string like 'my-renode:dev', got {type(ri).__name__}.")
+    # ---- renode: a version or a Docker image reference ----
+    renode = config.get("renode")
+    if renode is None:
+        if not any(k in config for k in ("renode_version", "renode_image")):
+            err("renode", "Required field missing — a Renode version (e.g. '1.16.1') or "
+                "a Docker image (e.g. 'my-renode:1.16.1').")
+    elif not isinstance(renode, str) or not renode.strip():
+        err("renode", "Must be a quoted string: a version like '1.16.1' or an image like "
+            f"'my-renode:1.16.1', got {renode!r}.")
 
     # ---- docker_args ----
     da = config.get("docker_args")
@@ -238,7 +238,7 @@ def validate_config(config) -> Tuple[List[Issue], List[Issue]]:
         if node_spec.get("prepare") is not None or node_spec.get("build") is not None:
             key = "build" if node_spec.get("build") is not None else "prepare"
             warn(f"{p}.{key}", "Machine-level build/prepare is not supported; "
-                 "move it into 'tests:' as a `type: shell` test. This entry is ignored.")
+                 "move it to the top-level 'prepare:' section. This entry is ignored.")
 
     # ---- connections / mappings: parse each line for obvious errors ----
     _validate_connection_lines(config.get("connections", ""), "connections", err, warn)
@@ -257,6 +257,27 @@ def validate_config(config) -> Tuple[List[Issue], List[Issue]]:
     if artifacts_cfg is not None and not isinstance(artifacts_cfg, (list, str)):
         err("artifacts", "Must be a list of glob patterns or a block string, got "
             f"{type(artifacts_cfg).__name__}.")
+
+    # ---- prepare (top-level): shell steps before anything uses the Renode image ----
+    prepare_cfg = config.get("prepare")
+    if prepare_cfg is not None:
+        if not isinstance(prepare_cfg, list):
+            err("prepare", "Must be a list of prepare steps (each a mapping with "
+                f"image:/script:/steps:), got {type(prepare_cfg).__name__}.")
+        else:
+            for idx, block in enumerate(prepare_cfg):
+                bp = f"prepare[{idx}]"
+                if not isinstance(block, dict):
+                    err(bp, f"Each prepare step must be a mapping, got {type(block).__name__}.")
+                    continue
+                if block.get("image") is not None and not isinstance(block.get("image"), str):
+                    err(f"{bp}.image", "If set, 'image' must be a string (e.g. 'arm-gcc:13').")
+                if "requires_sim" in block or "type" in block:
+                    key = "requires_sim" if "requires_sim" in block else "type"
+                    err(f"{bp}.{key}", "Prepare steps are shell steps that run before the "
+                        "emulation exists; they can't start it. Use a shell test with "
+                        "'requires_sim: true' instead.")
+                _validate_shell_steps(block, bp, err, warn)
 
     # ---- tests ----
     tests_cfg = config.get("tests") or []
@@ -303,7 +324,7 @@ def validate_config(config) -> Tuple[List[Issue], List[Issue]]:
 # ---- helpers ----
 
 def _validate_shell_steps(item, p, err, warn):
-    """Validate the step structure shared by tests and build blocks: either a `steps:`
+    """Validate the step structure shared by tests and prepare blocks: either a `steps:`
     list, or a single-step `script:`/`file:` shorthand at the item level."""
     if "steps" in item:
         steps = item["steps"]

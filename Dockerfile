@@ -15,7 +15,7 @@
 #
 # (The bundled `hector-docker` wrapper fills in the UID + mounts for you.)
 #
-# Match the Renode version to your project's renode_version at build time:
+# Match the Renode version to your project's `renode:` version at build time:
 #   docker build --build-arg RENODE_VERSION=1.16.1 -t hector-renode:1.16.1 .
 #
 # Caveat: in --no-docker mode a `shell` test's `image:` is ignored and the

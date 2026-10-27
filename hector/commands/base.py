@@ -49,15 +49,10 @@ def add_common_arguments(parser):
              "and config defaults. Example: --set BIN=fw.elf --set BOARD=nucleo.",
     )
     parser.add_argument(
-        "--renode-version", metavar="VERSION", dest="renode_version",
-        help="Renode version to use (e.g. 1.16.1). Overrides renode_version from "
+        "--renode", metavar="VERSION|IMAGE", dest="renode",
+        help="Renode to use: a version (1.16.1 → antmicro/renode:1.16.1) or any Docker "
+             "image (e.g. a self-built my-renode:1.16.1). Overrides renode: from "
              ".hector.yaml.",
-    )
-    parser.add_argument(
-        "--renode-image", metavar="IMAGE", dest="renode_image",
-        help="Renode Docker image to use instead of antmicro/renode:<version> (any "
-             "image, e.g. a self-built one: my-renode:dev). Overrides renode_image / "
-             "renode_version from .hector.yaml.",
     )
     parser.add_argument(
         "--docker-args", metavar="ARGS", dest="docker_args", default="",

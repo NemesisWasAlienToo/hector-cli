@@ -1,5 +1,5 @@
 version: "0.1"
-renode_version: "1.16.1"
+renode: "1.16.1"
 
 # ST NUCLEO-H753ZI (STM32H753ZI, Cortex-M7) running Hubris.
 #

@@ -1,5 +1,5 @@
 version: "0.1"
-renode_version: "1.16.1"
+renode: "1.16.1"
 
 # ST NUCLEO-F767ZI (STM32F767ZI, Cortex-M7) defined inline.
 #

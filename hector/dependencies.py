@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Managed clones of Renode and the verilator integration, pinned to renode_version."""
+"""Managed clones of Renode and the verilator integration, pinned to the `renode:` version."""
 
 import os
 

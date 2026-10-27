@@ -153,3 +153,34 @@ def test_sim_start_failure_fails_the_test(shell_env, monkeypatch):
                                     [{"script": "true"}], ctx, 0)
     assert not res.passed and steps_seen == []
     assert ("stop",) in _FakeSim.calls               # the sim is still torn down
+
+
+# ---- prepare steps ----
+
+@pytest.fixture
+def prepare_env(monkeypatch, tmp_path):
+    from hector import runners
+    runs = []
+    outcomes = iter([True, False, True])
+    monkeypatch.setattr(runners, "run_in_container",
+                        lambda script, image, live, env=None:
+                        runs.append((script, image)) or ("out", next(outcomes)))
+    return runners, runs, str(tmp_path)
+
+
+def test_prepare_runs_on_the_host_without_an_image(prepare_env):
+    runners, runs, results_dir = prepare_env
+    results = runners.run_prepare_steps(
+        [{"name": "image", "script": "docker build -t r:1 ."}], results_dir)
+    assert runs == [("docker build -t r:1 .", None)]
+    assert [(r.name, r.type, r.passed) for r in results] == [("image", "prepare", True)]
+
+
+def test_prepare_stops_at_the_first_failing_block(prepare_env):
+    runners, runs, results_dir = prepare_env
+    blocks = [{"name": "a", "script": "a"},
+              {"name": "b", "image": "alpine:3.19", "script": "b"},
+              {"name": "c", "script": "c"}]
+    results = runners.run_prepare_steps(blocks, results_dir)
+    assert runs == [("a", None), ("b", "alpine:3.19")]
+    assert [r.passed for r in results] == [True, False]

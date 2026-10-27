@@ -49,7 +49,7 @@ def config_in_subdir(tmp_path, monkeypatch):
     monkeypatch.setattr(core, "WORKSPACE_ROOT", None)
     monkeypatch.setattr(pipeline, "MOUNT_CONFIG_DIR", False)
     (tmp_path / "board").mkdir()
-    (tmp_path / "board" / ".hector.yaml").write_text("renode_version: '1.16.1'\n")
+    (tmp_path / "board" / ".hector.yaml").write_text("renode: '1.16.1'\n")
     return pipeline, core, tmp_path
 
 
@@ -65,11 +65,11 @@ def test_load_config_sets_config_dir(config_in_subdir, monkeypatch):
 def test_load_config_rejects_removed_build_section(config_in_subdir, monkeypatch, capsys):
     pipeline, core, root = config_in_subdir
     (root / "board" / ".hector.yaml").write_text(
-        "renode_version: '1.16.1'\nbuild:\n  - script: 'true'\n")
+        "renode: '1.16.1'\nbuild:\n  - script: 'true'\n")
     monkeypatch.setattr(pipeline, "CONFIG_PATH", "board/.hector.yaml")
     with pytest.raises(SystemExit):
         pipeline.load_config_or_exit()
-    assert "type: shell" in capsys.readouterr().err
+    assert "renamed to 'prepare:'" in capsys.readouterr().err
 
 
 def test_load_config_outside_cwd_is_mounted_too(config_in_subdir, monkeypatch):
@@ -144,20 +144,30 @@ def test_docker_args_warn_under_no_docker(monkeypatch, capsys, cfg, warns):
 # ---- resolve_renode_image ----
 
 def test_image_from_config():
-    args = SimpleNamespace(renode_version=None)
-    tag, image = resolve_renode_image({"renode_version": "1.16.1"}, args)
+    args = SimpleNamespace(renode=None)
+    tag, image = resolve_renode_image({"renode": "1.16.1"}, args)
     assert tag == "v1.16.1" and image == "antmicro/renode:1.16.1"
 
 
 def test_image_cli_overrides_config_and_strips_v():
-    args = SimpleNamespace(renode_version="v1.15.0")
-    tag, image = resolve_renode_image({"renode_version": "1.16.1"}, args)
+    args = SimpleNamespace(renode="v1.15.0")
+    tag, image = resolve_renode_image({"renode": "1.16.1"}, args)
     assert tag == "v1.15.0" and image == "antmicro/renode:1.15.0"
 
 
-def test_image_missing_version_raises():
-    with pytest.raises(ValueError, match="renode_version"):
-        resolve_renode_image({}, SimpleNamespace(renode_version=None))
+@pytest.mark.parametrize("value,tag", [
+    ("my-renode:1.16.1", "v1.16.1"),           # the source tag comes from the image tag
+    ("ghcr.io/me/renode:v1.15.0", "v1.15.0"),
+    ("my-renode:patched", None),               # unknown; only matters if source is needed
+    ("localhost:5000/renode", None),           # a registry port isn't an image tag
+])
+def test_image_reference_is_used_as_is(value, tag):
+    assert resolve_renode_image({"renode": value}, SimpleNamespace(renode=None)) == (tag, value)
+
+
+def test_image_missing_renode_raises():
+    with pytest.raises(ValueError, match="renode:"):
+        resolve_renode_image({}, SimpleNamespace(renode=None))
 
 
 # ---- _resolve_set_overrides ----

@@ -3,6 +3,7 @@
 The conductor: CLI parsing and the per-job pipeline that ties the modules together.
 
 Phases per job:
+  0   prepare steps (runners.run_prepare_steps), before anything uses the Renode image
   1   build module types (modules.py)
   1.5 instantiate peripherals, resolve mappings + connections, finalize repl/commands
   2   generate one emulation resc; then simulate / debug / test
@@ -31,7 +32,7 @@ from .generator import (collect_artifacts, finalize_commands, generate_emulation
 from .hubs import HUBS
 from .modules import BuildContext, build_modules
 from .reporters import emit
-from .runners import RunnerContext, run_tests
+from .runners import RunnerContext, run_prepare_steps, run_tests
 from .validator import REMOVED_TOP_KEYS, print_issues, validate_config
 
 
@@ -142,28 +143,21 @@ def resolve_renode_image(config, args):
     """Pick the Renode Docker image and the git tag of the matching source; return
     (git_tag, docker_image).
 
-    The image is either an explicit `renode_image` (any image, including a self-built
-    one) or `antmicro/renode:<renode_version>`. CLI flags beat the config, and a flag
-    of either kind replaces both config fields — so `--renode-version` still wins over
-    a `renode_image:` in the file. The git tag (only used to clone the Renode source)
-    comes from the version, or from the image tag when it looks like one; it is None
-    when neither tells us, and only matters if the config needs the source."""
-    flag_version = getattr(args, "renode_version", None)
-    flag_image = getattr(args, "renode_image", None)
-    if flag_version or flag_image:
-        version, image = flag_version, flag_image
-    else:
-        version, image = config.get("renode_version"), config.get("renode_image")
-    if not version and not image:
-        raise ValueError("Top-level 'renode_version' (e.g. '1.16.1') or 'renode_image' "
-                         "is required, or pass --renode-version / --renode-image on the "
-                         "command line.")
-    normalized = str(version).lstrip("v") if version else None
-    image = str(image) if image else f"antmicro/renode:{normalized}"
-    if not normalized:
-        tag = image.rsplit("/", 1)[-1].partition(":")[2]
-        normalized = tag.lstrip("v") if _VERSION_TAG_RE.match(tag) else None
-    return (f"v{normalized}" if normalized else None), image
+    `renode:` (or --renode, which wins) is either a version — `1.16.1` means
+    `antmicro/renode:1.16.1` — or any Docker image reference, including one a prepare
+    step builds. The git tag (only used to clone the Renode source) comes from the
+    version, or from the image tag when it looks like one; it is None when neither
+    tells us, and only matters if the config needs the source."""
+    renode = getattr(args, "renode", None) or config.get("renode")
+    if not renode:
+        raise ValueError("Top-level 'renode:' is required — a version (e.g. '1.16.1') or "
+                         "a Docker image — or pass --renode on the command line.")
+    renode = str(renode).strip()
+    if _VERSION_TAG_RE.match(renode):
+        normalized = renode.lstrip("v")
+        return f"v{normalized}", f"antmicro/renode:{normalized}"
+    tag = renode.rsplit("/", 1)[-1].partition(":")[2]
+    return (f"v{tag.lstrip('v')}" if _VERSION_TAG_RE.match(tag) else None), renode
 
 
 def apply_docker_args(config, args):
@@ -212,10 +206,10 @@ def build_job_config(action, config, args, *, test_mode=False):
     # Clone Renode only when the config actually needs the source; otherwise skip it
     # entirely (a ~200 MB clone) and leave the framework vars empty.
     if _needs_renode_source(config):
-        if not git_tag:
+        if not git_tag and not os.path.isdir(getattr(args, "renode_dir", None) or ""):
             raise ValueError(f"This config needs the Renode source, but the version of "
-                             f"'{docker_image}' can't be inferred from its tag — also set "
-                             "'renode_version' (or --renode-version) to pick the checkout.")
+                             f"'{docker_image}' can't be inferred from its tag — tag the "
+                             "image with it (e.g. my-renode:1.16.1) or pass --renode-dir.")
         renode_dir, integration_dir = prepare_dependencies(
             git_tag,
             renode_dir=getattr(args, "renode_dir", None),
@@ -285,7 +279,7 @@ def execute_jobs(cfg, args):
 
 
 def snapshot_fastpath(args):
-    """`run --snapshot --renode-version|--renode-image` with no .hector.yaml: write a
+    """`run --snapshot --renode VERSION|IMAGE` with no .hector.yaml: write a
     snapshot loader resc and boot it directly, skipping config/dependency machinery."""
     if not os.path.isfile(args.snapshot):
         print(f"[ERROR] Snapshot not found: {args.snapshot}", file=sys.stderr)
@@ -643,6 +637,22 @@ def run_job(i, total_jobs, job_context, cfg):
     runtime = RuntimeOptions()
 
     try:
+        # ---- PHASE 0: prepare ----
+        # Before anything touches the Renode image (module builds, the sim, tests): a
+        # prepare step may build that image, or the firmware the machines load. Not for
+        # `export`, which only prints the commands. A failure skips the rest of the job
+        # but is still reported, like a test.
+        prepare_results = []
+        if cfg.action is not action_export:
+            prepare_blocks = interpolate(copy.deepcopy(cfg.config.get("prepare", [])), context)
+            prepare_results = run_prepare_steps(prepare_blocks, cfg.output_dir, live=cfg.live)
+        if not all(r.passed for r in prepare_results):
+            print("\n[PREPARE] a prepare step failed — skipping the simulation/tests.")
+            result["test_results"] = prepare_results
+            result["passed"] = False
+            emit(prepare_results, cfg.output_dir, cfg.reporter_names)
+            return result
+
         # ---- PHASE 1: build modules ----
         build_ctx = BuildContext(
             renode_dir_container=cfg.fw_vars["RENODE_DIR"],
@@ -791,8 +801,9 @@ def run_job(i, total_jobs, job_context, cfg):
                          concrete_nodes=concrete_nodes)
         cfg.action(state, cfg, result)
 
-        # ---- PHASE 2.5: report ----
-        step_results = result.get("test_results") or []
+        # ---- PHASE 2.5: report (prepare steps + tests, together) ----
+        step_results = prepare_results + (result.get("test_results") or [])
+        result["test_results"] = step_results
         if step_results:
             emit(step_results, cfg.output_dir, cfg.reporter_names)
             result["passed"] = result["passed"] and all(r.passed for r in step_results)

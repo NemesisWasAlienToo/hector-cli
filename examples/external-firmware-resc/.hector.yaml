@@ -1,13 +1,11 @@
 version: "0.1"
-renode_version: "1.16.1"
+renode: "1.16.1"
 
-# Firmware that comes from OUTSIDE the generated resc: the first test downloads it next
+# Firmware that comes from OUTSIDE the generated resc: a prepare step downloads it next
 # to this file, and the machine's `resc:` loads it by a path relative to this file -
 # not via `firmware:`, so hector does nothing to the path.
 #
 # Relative `@paths` in the resc are resolved by Renode, not by hector.
-#
-# `hector run` only starts the sim, so run `hector test` once first to fetch fw/.
 
 arguments:
   FW_URL: "https://dl.antmicro.com/projects/renode/zephyr-stm32f103-button.elf-s_276760-1bf32c99bbb3c01d81e13ca68118eaf08b2a815f"
@@ -24,11 +22,10 @@ machines:
     commands: |
       showAnalyzer usart2
 
-tests:
-  # Tests run in order: fetch the firmware before anything boots it.
+# Runs before the machine exists, for `hector run` and `hector test` alike.
+prepare:
   - name: Fetch firmware
-    type: shell
-    image: alpine:latest
+    image: alpine:3.19
     steps:
       - name: download into fw/
         script: |
@@ -36,6 +33,7 @@ tests:
           wget -q -O fw/button.elf "${FW_URL}"
           ls -l fw
 
+tests:
   - name: Firmware loaded from the resc boots
     type: robot
     steps:

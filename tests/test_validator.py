@@ -34,36 +34,59 @@ def test_non_mapping_config_is_error():
     assert errors[0].path == "(root)"
 
 
-def test_missing_renode_version_is_error():
+def test_missing_renode_is_error():
     errors, _ = validate_config({"machines": {"m": {}}})
-    assert any(i.path == "renode_version" for i in errors)
+    assert any(i.path == "renode" for i in errors)
 
 
-def test_renode_image_alone_satisfies_requirement():
-    errors, _ = validate_config({"renode_image": "my-renode:dev"})
+@pytest.mark.parametrize("value", ["1.16.1", "my-renode:dev", "ghcr.io/me/renode:1.16.1"])
+def test_renode_accepts_a_version_or_an_image(value):
+    errors, _ = validate_config({"renode": value})
     assert errors == []
+
+
+@pytest.mark.parametrize("key", ["renode_version", "renode_image"])
+def test_old_renode_keys_are_errors(key):
+    errors, _ = validate_config({key: "1.16.1"})
+    assert [e.path for e in errors] == [key]
+    assert "renode:" in errors[0].message
+
+
+def test_prepare_steps_validate_like_shell_steps():
+    errors, warnings = validate_config({"renode": "1.16.1", "prepare": [
+        {"name": "img", "script": "docker build -t r:1 ."},
+        {"name": "fw", "image": "alpine:3.19", "steps": [{"name": "s", "script": "true"}]},
+    ]})
+    assert errors == [] and warnings == []
+
+
+@pytest.mark.parametrize("key", ["requires_sim", "type"])
+def test_prepare_steps_cannot_start_the_sim(key):
+    errors, _ = validate_config({"renode": "1.16.1",
+                                 "prepare": [{"name": "x", "script": "true", key: True}]})
+    assert [e.path for e in errors] == [f"prepare[0].{key}"]
 
 
 @pytest.mark.parametrize("value", ["-v /a:/a", ["-v /a:/a", "-e X=1"]])
 def test_docker_args_accepts_string_or_list(value):
-    errors, warnings = validate_config({"renode_version": "1.16.1", "docker_args": value})
+    errors, warnings = validate_config({"renode": "1.16.1", "docker_args": value})
     assert errors == [] and not any(w.path == "docker_args" for w in warnings)
 
 
 def test_docker_args_wrong_type_is_error():
-    errors, _ = validate_config({"renode_version": "1.16.1", "docker_args": {"v": "/a"}})
+    errors, _ = validate_config({"renode": "1.16.1", "docker_args": {"v": "/a"}})
     assert any(i.path == "docker_args" for i in errors)
 
 
 def test_unknown_module_kind_is_error():
-    cfg = {"renode_version": "1.16.1",
+    cfg = {"renode": "1.16.1",
            "modules": {"u": {"kind": "bogus", "type": "X", "source": "s"}}}
     errors, _ = validate_config(cfg)
     assert any(i.path == "modules.u.kind" for i in errors)
 
 
 def test_module_missing_type_is_error():
-    cfg = {"renode_version": "1.16.1", "modules": {"u": {"kind": "csharp", "source": "s.dll"}}}
+    cfg = {"renode": "1.16.1", "modules": {"u": {"kind": "csharp", "source": "s.dll"}}}
     errors, _ = validate_config(cfg)
     assert any(i.path == "modules.u.type" for i in errors)
 
@@ -71,7 +94,7 @@ def test_module_missing_type_is_error():
 # ---- top-level keys ----
 
 def _base(**extra):
-    cfg = {"renode_version": "1.16.1"}
+    cfg = {"renode": "1.16.1"}
     cfg.update(extra)
     return cfg
 
@@ -86,11 +109,11 @@ def test_renamed_top_level_key_warns():
     assert any("machines" in w.message for w in warnings if w.path == "nodes")
 
 
-@pytest.mark.parametrize("key", ["build", "setup", "prepare"])
-def test_removed_build_section_is_error(key):
+@pytest.mark.parametrize("key", ["build", "setup"])
+def test_old_build_section_is_error(key):
     # Silently skipping it (e.g. a firmware fetch) would break every later test.
     errors, _ = validate_config(_base(**{key: [{"name": "x", "script": "true"}]}))
-    assert any(i.path == key and "type: shell" in i.message for i in errors)
+    assert any(i.path == key and "'prepare:'" in i.message for i in errors)
 
 
 # ---- machine schema: platform / repl / resc ----

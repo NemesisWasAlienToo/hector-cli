@@ -354,3 +354,43 @@ def run_tests(tests, ctx, fail_fast=False):
                 print(f"\n[FAIL-FAST] Stopping after a failing test ({remaining} skipped).")
             break
     return results
+
+
+def run_prepare_steps(blocks, results_dir, live=False):
+    """Run the `prepare:` steps (compile firmware, fetch files, build the Renode image,
+    ...) before anything uses the Renode image — so a prepare step can build the image
+    `renode:` names.
+
+    Each block runs in a one-off container of its `image:`, or on the host without one
+    (that's how a step reaches `docker build`). The emulation never runs here. Returns
+    one StepResult per block (type "prepare"), reported like tests; stops at the first
+    failing block, since everything after depends on its outputs (the caller then
+    skips the sim/tests)."""
+    if not blocks:
+        return []
+    print("\n[PREPARE] preparing inputs ...")
+    results = []
+    for b_idx, block in enumerate(blocks):
+        block = block or {}
+        name = block.get("name", f"prepare_{b_idx}")
+        image = block.get("image") or None
+        where = "host" if _core.NO_DOCKER or not image else f"image: {image}"
+        print(f"\n[PREPARE] {name}  ({where})")
+        if _core.NO_DOCKER and image:
+            print(f"  [WARN] --no-docker: image '{image}' is ignored; running on the host.")
+
+        step_records, all_commands, combined_stdout = _run_shell_steps(
+            _normalize_steps(block), image, live)
+        all_passed = all(r["passed"] for r in step_records)
+        total_duration = sum(r["duration"] for r in step_records)
+        slug = re.sub(r"[^\w-]", "_", name)[:40]
+        html_path = _write_shell_html(os.path.join(results_dir, f"prepare_{b_idx}_{slug}"),
+                                      name, step_records, all_passed, total_duration)
+        results.append(StepResult(
+            name=name, type="prepare", passed=all_passed, duration=total_duration,
+            commands=all_commands, stdout="\n\n".join(combined_stdout), stderr="",
+            artifacts={"report_html": html_path}))
+        if not all_passed:
+            print(f"[PREPARE] '{name}' failed — skipping the rest.")
+            break
+    return results

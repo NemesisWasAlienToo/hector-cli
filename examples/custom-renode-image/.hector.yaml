@@ -1,0 +1,33 @@
+version: "0.1"
+
+# The Renode image is built by a prepare step, then used for everything after it. The
+# version in the tag also tells hector which Renode source matches, if it ever needs it.
+renode: "hector-example-renode:1.16.1"
+
+prepare:
+  # No `image:` → runs on the host, where `docker build` is available. Docker's cache
+  # makes repeat runs take a second.
+  - name: Build the Renode image
+    script: |
+      docker build -q -t hector-example-renode:1.16.1 renode/
+
+machines:
+  mcu:
+    platform:
+      - platforms/cpus/stm32f103.repl
+
+tests:
+  # No `image:` → the `renode:` image, i.e. the one just built.
+  - name: Tests run in the built image
+    type: shell
+    script: |
+      cat /opt/hector-patched
+
+  - name: The emulation runs in it too
+    type: robot
+    steps:
+      - name: machine is up
+        script: |
+          Execute Command    mach set "mcu"
+          ${r}=    Execute Command    sysbus WhatPeripheralIsAt 0x40013800
+          Should Contain    ${r}    STM32_UART

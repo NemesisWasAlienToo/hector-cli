@@ -1,5 +1,5 @@
 version: "0.1"
-renode_version: "1.16.1"
+renode: "1.16.1"
 
 # Defines an STM32F103 by pasting a platform description straight into the config.
 #

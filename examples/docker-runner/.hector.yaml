@@ -1,17 +1,16 @@
 version: "0.1"
-renode_version: "1.16.1"
+renode: "1.16.1"
 
-# Demonstrates sim-independent `shell` tests, with NO machine at all. The first test
-# writes a file into the project; the later tests read it back. Everything runs in
+# Demonstrates sim-independent `shell` tests, with NO machine at all. A prepare step
+# writes a file into the project; the tests read it back. Everything runs in
 # containers with the project bind-mounted at the same path, so files flow between
-# tests for free — no copying, no plumbing.
+# steps for free — no copying, no plumbing.
 #
-# Tests run in order, so a test that prepares inputs goes first. `shell` tests don't
-# need Renode unless they set `requires_sim: true`, so this config needs no `machines:`.
+# `shell` tests don't need Renode unless they set `requires_sim: true`, so this config
+# needs no `machines:`.
 
-tests:
+prepare:
   - name: Generate input
-    type: shell
     image: python:3.12-slim          # a pinned toolchain — no Renode involved
     steps:
       - name: write values.txt
@@ -19,6 +18,7 @@ tests:
           mkdir -p generated
           printf '10\n20\n12\n' > generated/values.txt
 
+tests:
   # Reads the generated file in a clean Python container and asserts on it.
   - name: Validate generated file
     type: shell
