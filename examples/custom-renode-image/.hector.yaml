@@ -9,7 +9,7 @@ prepare:
   # makes repeat runs take a second.
   - name: Build the Renode image
     script: |
-      docker build -q -t hector-example-renode:1.16.1 renode/
+      docker build -q -t hector-example-renode:1.16.1 docker/
 
 machines:
   mcu:
