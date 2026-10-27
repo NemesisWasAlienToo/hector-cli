@@ -18,9 +18,10 @@ renode:
 # link to your host — ordinary IP/sockets then work across it.
 #
 # Requirements for the networking part:
-#   * the container needs NET_ADMIN to create the tap (rootful Docker / --cap-add
-#     NET_ADMIN); the bundled test runner does NOT grant this, so the `nc` flow is
-#     a manual step, not part of `hector test`.
+#   * creating the tap needs NET_ADMIN, /dev/net/tun and root in the container;
+#     hector adds those itself for the `tap:` mapping (see below), when the host
+#     has /dev/net/tun. Configuring the host side and moving data are manual
+#     steps, not part of `hector test`.
 #
 # --- bring the link up (after `hector` is running) ---
 #   Host:    sudo ip addr add 192.0.2.1/24 dev tap0

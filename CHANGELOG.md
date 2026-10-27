@@ -4,6 +4,15 @@ All notable changes to `hector-cli`. Versions follow [semver](https://semver.org
 while hector is 0.x, a minor version may contain breaking changes (marked
 **Breaking**).
 
+## Unreleased
+
+### Docs
+- Examples: READMEs for `multi-machine-uart-link`, `network-ping`, `stm32f103-full`,
+  `yaml-defined-mcu` and `zedboard-net`; `zedboard-net` no longer claims hector can't
+  grant the TAP's `NET_ADMIN` (it does, automatically); `docker-runner`'s run
+  instructions use the repo's paths; `multi-machine-uart-link` describes itself and
+  its shell test has a real name.
+
 ## 0.12.0 — 2026-10-27
 
 ### Added

@@ -22,8 +22,8 @@ What it shows:
 ## Run
 
 ```bash
-cd cli/examples/docker-runner
-python -m hector test
+cd examples/docker-runner
+hector test
 ```
 
 You need Docker available. On first run the `python:3.12-slim` and `alpine:3.19`

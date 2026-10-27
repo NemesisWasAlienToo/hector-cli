@@ -2,6 +2,11 @@ version: "0.2"
 renode:
   image: "1.16.1"
 
+# Two machines joined by a UART hub: an STM32F103 (Zephyr button demo, plus a
+# Verilator-built `uartlite` peripheral at 0x70000000) and a vexpress Cortex-A9 running
+# Linux. stm32f103.usart1 <-> uart_link <-> vexpress.uart1. Building the module clones
+# the Renode source and the verilator integration into .hector/ on the first run.
+
 artifacts:
   - "*.xml"
 
@@ -107,9 +112,9 @@ tests:
           Write Line To Uart        echo ping > /dev/ttyAMA1 && echo link_ok
           Wait For Line On Uart     link_ok    timeout=10
 
-  - name: bashing
+  - name: Matrix variable reaches a shell test
     type: shell
     steps:
-      - name: Echo test
+      - name: echo the job's NUM
         script: |
           echo "hi from matrix job NUM=${NUM}"
