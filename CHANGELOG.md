@@ -11,6 +11,9 @@ while hector is 0.x, a minor version may contain breaking changes (marked
   exit 1 if one fails. For tools that start the emulation themselves from
   `hector export`, which never runs prepare steps.
 
+### Docs
+- README: an Examples index listing every example (seven weren't linked anywhere).
+
 ## 0.11.0 — 2026-10-27
 
 ### Added

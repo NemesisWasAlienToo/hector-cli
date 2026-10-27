@@ -25,6 +25,7 @@ Licensed under **AGPL-3.0-or-later** — see [LICENSE](LICENSE) and
 - [Changelog](CHANGELOG.md)
 - [Run via Docker (no install)](#run-via-docker-no-install)
 - [Invocation modes](#invocation-modes)
+- [Examples](#examples)
 - [Configuration reference](#configuration-reference)
   - [Top-level fields](#top-level-fields)
   - [arguments](#arguments)
@@ -662,6 +663,31 @@ Parses and validates `.hector.yaml` without touching Docker. All errors are coll
   WARN   machines.boardA.peripherals.btn: Unknown machine key 'tyep'.
 [VALIDATE] FAILED — 2 error(s), 1 warning(s).
 ```
+
+---
+
+## Examples
+
+Each folder under [`examples/`](examples) is a complete project: `cd` into it and run
+`hector test`. All but `torizon-verdin-imx8mp` run in the repo's CI.
+
+| Example | What it shows |
+|---|---|
+| [`docker-runner`](examples/docker-runner) | `prepare:` + `shell` tests with no machine at all; per-test `docker-flags` |
+| [`external-firmware-resc`](examples/external-firmware-resc) | Firmware fetched by a prepare step and loaded from `resc:` by a path relative to the hectorfile |
+| [`custom-renode-image`](examples/custom-renode-image) | A prepare step builds the Renode image that `renode.image` names |
+| [`background-sim`](examples/background-sim) | A `shell` test with `requires-machine: true` talking to the running emulation (monitor + `tcp:` console) |
+| [`inline-repl-resc`](examples/inline-repl-resc) | A board defined entirely inside `.hector.yaml` (inline `repl:` / `resc:`) |
+| [`yaml-defined-mcu`](examples/yaml-defined-mcu) | An STM32F103 defined in YAML, mirroring Renode's `stm32f103.repl` |
+| [`stm32f103-full`](examples/stm32f103-full) | A Blackpill board in YAML, with peripherals and connections |
+| [`nucleo-f767zi`](examples/nucleo-f767zi) | A board Renode doesn't ship, defined inline |
+| [`nucleo-h753zi`](examples/nucleo-h753zi) | A shipped board loaded via `using` and patched inline, booting Hubris |
+| [`csharp-peripheral`](examples/csharp-peripheral) | A custom C# peripheral, compiled by Renode at load |
+| [`multi-machine-uart-link`](examples/multi-machine-uart-link) | Two machines over a UART hub, a Verilator-built peripheral, a matrix |
+| [`toradex-stm32`](examples/toradex-stm32) | A Linux board (Cortex-A9) linked to an STM32F103 over UART |
+| [`network-ping`](examples/network-ping) | Two Zynq-7000 Linux machines pinging each other over an emulated switch |
+| [`zedboard-net`](examples/zedboard-net) | Zynq-7000 Linux bridged to the host over a TAP (needs host privileges) |
+| [`torizon-verdin-imx8mp`](examples/torizon-verdin-imx8mp) | Unmodified Torizon OS to the login prompt on a Verdin iMX8M Plus, with a patched Renode built in `prepare:` (slow: ~15 min first build, 3 GB RAM) |
 
 ---
 
