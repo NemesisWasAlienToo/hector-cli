@@ -16,12 +16,13 @@ import html as _html
 import os
 import re
 import shlex
+import subprocess
 import time
 from dataclasses import dataclass, field
 
 from . import core as _core
 from .core import ARTIFACTS_DIR, Registry, from_config, to_container_path
-from .docker import resolve_shell_image, run_in_container, run_renode_test
+from .docker import BackgroundRenode, resolve_shell_image, run_in_container, run_renode_test
 from .reporters import StepResult
 
 TEST_RUNNERS = Registry("test runner")
@@ -220,10 +221,36 @@ def _run_robot_test(test, steps, ctx, test_index):
     )]
 
 
+def _run_shell_steps(steps, image, live, env=None):
+    """Run each step in a one-off container; returns (step_records, commands, stdout)."""
+    step_records = []
+    all_commands = []
+    combined_stdout = []
+    for step_idx, step in enumerate(steps):
+        step_name = step.get("name", f"step_{step_idx}")
+        script = step.get("script", "")
+        print(f"  {step_name}")
+
+        t0 = time.monotonic()
+        stdout, passed = run_in_container(script, image, live, env=env)
+        duration = time.monotonic() - t0
+
+        all_commands.extend(l for l in script.splitlines() if l.strip())
+        combined_stdout.append(f"# {step_name}\n{stdout}".rstrip())
+        step_records.append({"name": step_name, "passed": passed,
+                             "duration": duration, "output": stdout})
+    return step_records, all_commands, combined_stdout
+
+
 def _run_shell_test(test, steps, ctx, test_index):
     """Run all steps of a shell test, each in a one-off container of the resolved image
     (or on the host under --no-docker). One StepResult per test, one report.html —
     mirrors the robot layout (a multi-step test is a single row named after the test).
+
+    With `requires_sim: true` the emulation runs headless in the background for the
+    whole test (see BackgroundRenode): the steps reach it through the host network —
+    its monitor on $HECTOR_MONITOR_PORT, plus any tcp:/pty mappings — and its log is
+    saved as renode.log next to the report.
     """
     test_name = test.get("name", f"test_{test_index}")
     image = resolve_shell_image(test, ctx.image, label=test_name)
@@ -231,34 +258,39 @@ def _run_shell_test(test, steps, ctx, test_index):
     where = "host" if _core.NO_DOCKER else f"image: {image}"
     print(f"\n[TEST] {test_name}  (shell, {where})")
 
-    step_records = []
-    all_commands = []
-    combined_stdout = []
-    total_duration = 0.0
-    all_passed = True
+    t0 = time.monotonic()
+    artifacts = {}
+    if _needs_sim(test):
+        log_path = os.path.join(test_dir, "renode.log")
+        artifacts["renode_log"] = log_path
+        try:
+            with BackgroundRenode(ctx.image, log_path, ctx.runtime) as sim:
+                print(f"  [SIM] background emulation, monitor on port {sim.port}")
+                snapshot = ctx.snapshot or from_config(test.get("snapshot", ""))
+                if snapshot:
+                    sim.command(f"Load @{to_container_path(snapshot)}")
+                    sim.command("start")
+                else:
+                    sim.include(ctx.resc_host_path)
+                sim.release()
+                step_records, all_commands, combined_stdout = _run_shell_steps(
+                    steps, image, ctx.live, env={"HECTOR_MONITOR_PORT": sim.port})
+        except (RuntimeError, OSError, subprocess.CalledProcessError) as exc:
+            print(f"  [SIM] failed to start the emulation: {exc}")
+            step_records = [{"name": "start emulation", "passed": False,
+                             "duration": time.monotonic() - t0, "output": str(exc)}]
+            all_commands, combined_stdout = [], [str(exc)]
+    else:
+        step_records, all_commands, combined_stdout = _run_shell_steps(steps, image, ctx.live)
 
-    for step_idx, step in enumerate(steps):
-        step_name = step.get("name", f"step_{step_idx}")
-        script = step.get("script", "")
-        print(f"  {step_name}")
-
-        t0 = time.monotonic()
-        stdout, passed = run_in_container(script, image, ctx.live)
-        duration = time.monotonic() - t0
-
-        total_duration += duration
-        all_passed = all_passed and passed
-        all_commands.extend(l for l in script.splitlines() if l.strip())
-        combined_stdout.append(f"# {step_name}\n{stdout}".rstrip())
-        step_records.append({"name": step_name, "passed": passed,
-                             "duration": duration, "output": stdout})
-
-    html_path = _write_shell_html(test_dir, test_name, step_records,
-                                  all_passed, total_duration)
+    all_passed = all(r["passed"] for r in step_records)
+    total_duration = sum(r["duration"] for r in step_records)
+    artifacts["report_html"] = _write_shell_html(test_dir, test_name, step_records,
+                                                 all_passed, total_duration)
     return [StepResult(
         name=test_name, type="shell", passed=all_passed, duration=total_duration,
         commands=all_commands, stdout="\n\n".join(combined_stdout), stderr="",
-        artifacts={"report_html": html_path},
+        artifacts=artifacts,
     )]
 
 
@@ -279,77 +311,21 @@ def shell_runner(test, steps, ctx, index):
 _RENAMED_TEST_TYPES = {"bash": "shell", "docker": "shell"}
 
 
-# ── pre-sim build steps ───────────────────────────────────────────────────────
-
-def run_build_steps(blocks, default_image, results_dir, live=False):
-    """Run the pre-sim `build:` steps (compile firmware, generate/fetch files, ...).
-
-    Each block is a shell step run in a container of its image (or on the host under
-    --no-docker), with the project bind-mounted — so anything it writes into the project
-    is there for the sim and tests. Returns one StepResult per block (type "build") so
-    builds are reported like tests; stops at the first failing block, because the
-    simulation depends on these outputs (the caller skips the sim when one fails).
-    """
-    if not blocks:
-        return []
-    print("\n[BUILD] preparing inputs ...")
-    results = []
-    for b_idx, block in enumerate(blocks):
-        block = block or {}
-        name = block.get("name", f"build_{b_idx}")
-        image = resolve_shell_image(block, default_image, label=name)
-        where = "host" if _core.NO_DOCKER else f"image: {image}"
-        print(f"  {name}  ({where})")
-
-        step_records = []
-        all_commands = []
-        combined_stdout = []
-        total_duration = 0.0
-        all_passed = True
-
-        for step_idx, step in enumerate(_normalize_steps(block)):
-            script = step.get("script", "")
-            if not script.strip():
-                continue
-            step_name = step.get("name", f"step_{step_idx}")
-            t0 = time.monotonic()
-            stdout, passed = run_in_container(script, image, live)
-            duration = time.monotonic() - t0
-            total_duration += duration
-            all_passed = all_passed and passed
-            all_commands.extend(l for l in script.splitlines() if l.strip())
-            combined_stdout.append(f"# {step_name}\n{stdout}".rstrip())
-            step_records.append({"name": step_name, "passed": passed,
-                                 "duration": duration, "output": stdout})
-
-        slug = re.sub(r"[^\w-]", "_", name)[:40]
-        build_dir = os.path.join(results_dir, f"build_{b_idx}_{slug}")
-        html_path = _write_shell_html(build_dir, name, step_records,
-                                      all_passed, total_duration)
-        results.append(StepResult(
-            name=name, type="build", passed=all_passed, duration=total_duration,
-            commands=all_commands, stdout="\n\n".join(combined_stdout), stderr="",
-            artifacts={"report_html": html_path}))
-        if not all_passed:
-            print(f"[BUILD] '{name}' failed — aborting build.")
-            break
-    return results
-
-
 # ── driver ────────────────────────────────────────────────────────────────────
 
 def _needs_sim(test):
     """Whether a test requires the Renode simulation (the generated resc). Robot tests
-    always do; others honour `requires_sim` (default True)."""
+    always do (renode-test runs it); a shell test only with `requires_sim: true`, which
+    runs the emulation in the background for it."""
     rtype = _RENAMED_TEST_TYPES.get(test.get("type", "robot"), test.get("type", "robot"))
     if rtype == "robot":
         return True
-    return bool(test.get("requires_sim", True))
+    return bool(test.get("requires_sim", False))
 
 
 def run_tests(tests, ctx, fail_fast=False):
-    """Execute tests in order, returning their StepResults (the caller emits the reports,
-    combined with the build steps'). Sim-backed tests get their own Renode session; a test
+    """Execute tests in order, returning their StepResults (the caller emits the
+    reports). Sim-backed tests get their own Renode session; a test
     that needs the sim but has no generated resc (no machines) fails with a clear note.
     With fail_fast, stop after the first failing test."""
     results = []
@@ -364,7 +340,7 @@ def run_tests(tests, ctx, fail_fast=False):
         if _needs_sim(test) and not ctx.resc_host_path:
             name = test.get("name", f"test_{i}")
             print(f"\n[TEST] {name}\n  [SKIP] needs a simulation but no machine is "
-                  "defined (set 'requires_sim: false' for a sim-independent test).")
+                  "defined (robot tests and 'requires_sim: true' need one).")
             results.append(StepResult(
                 name=name, type=rtype, passed=False, duration=0.0,
                 stderr="requires a simulation but no machine/resc is available"))

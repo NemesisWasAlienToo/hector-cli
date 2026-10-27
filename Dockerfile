@@ -18,7 +18,7 @@
 # Match the Renode version to your project's renode_version at build time:
 #   docker build --build-arg RENODE_VERSION=1.16.1 -t hector-renode:1.16.1 .
 #
-# Caveat: in --no-docker mode a `build:`/`shell` step's `image:` is ignored and the
+# Caveat: in --no-docker mode a `shell` test's `image:` is ignored and the
 # script runs in THIS image instead; module builds (apt-get + cmake) likewise rely
 # on this image's toolchain. For full per-step image isolation, install the CLI
 # natively (pip) and let hector launch real per-step containers.

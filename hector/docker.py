@@ -7,7 +7,10 @@ boilerplate in one place.
 """
 
 import os
+import re
+import socket
 import subprocess
+import time
 
 from . import core
 from .core import to_container_path
@@ -41,10 +44,19 @@ def _user_flags():
     runtime.root) still wins. The module-build container (run_build) is the one
     exception — it needs root for apt-get and chowns its artifacts back itself.
 
+    The image's HOME belongs to its own user (uid 1000 in the Renode image), so any
+    other uid can't write there and Renode aborts at startup. HOME is pointed at /tmp
+    unless the user's docker args already set it.
+
     No-op on Windows: there is no host uid to map, and Docker Desktop handles
     bind-mount ownership itself."""
     ids = core.host_uid_gid()
-    return ["-u", f"{ids[0]}:{ids[1]}"] if ids else []
+    if not ids:
+        return []
+    flags = ["-u", f"{ids[0]}:{ids[1]}"]
+    if not any(a.startswith(("HOME=", "--env=HOME=")) for a in core.DOCKER_ARGS):
+        flags += ["-e", "HOME=/tmp"]
+    return flags
 
 
 def _workspace_mount(workdir=None):
@@ -129,23 +141,27 @@ def resolve_shell_image(item, default_image, label="shell"):
     return image or default_image
 
 
-def run_in_container(script, image, live=False):
+def run_in_container(script, image, live=False, env=None):
     """Run a shell script with the project bind-mounted at the workspace path, returning
     (output, passed); streams when live=True. `set -ex` makes commands echo and the run
-    fail on the first error.
+    fail on the first error. env: extra environment variables for the script.
 
-    Backs the `shell` test type and the `build:` steps. Normally a one-off container of
+    Backs the `shell` test type. Normally a one-off container of
     `image`; under --no-docker the script runs directly on the host (the image is moot).
     Either way it runs in the config's directory (core.execution_dir)."""
     cwd = None
+    proc_env = None
     if core.NO_DOCKER:
         cmd = ["bash", "-c", f"set -ex\n{script}"]
         cwd = core.execution_dir()
+        proc_env = {**os.environ, **env} if env else None
     else:
+        env_flags = [f for k, v in (env or {}).items() for f in ("-e", f"{k}={v}")]
         cmd = ["docker", "run", "--rm", *_HOST_NETWORK, *_workspace_mount(),
-               *_extra_mounts(), *_user_flags(), image, "sh", "-c", f"set -ex\n{script}"]
+               *_extra_mounts(), *_user_flags(), *env_flags,
+               image, "sh", "-c", f"set -ex\n{script}"]
     if live:
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, cwd=cwd,
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, cwd=cwd, env=proc_env,
                                 stderr=subprocess.STDOUT, text=True)
         lines = []
         for line in proc.stdout:
@@ -154,7 +170,7 @@ def run_in_container(script, image, live=False):
         proc.wait()
         return "".join(lines), proc.returncode == 0
     proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                          cwd=cwd)
+                          cwd=cwd, env=proc_env)
     if proc.stdout:
         print(proc.stdout, end="")
     return proc.stdout, proc.returncode == 0
@@ -183,6 +199,115 @@ def run_renode(resc_filename, image, extra_args=None, output_dir="results", runt
         os.makedirs(os.path.join(os.getcwd(), output_dir), exist_ok=True)
     subprocess.run(build_renode_argv(resc_filename, image, extra_args, runtime),
                    cwd=core.execution_dir() if core.NO_DOCKER else None)
+
+
+class BackgroundRenode:
+    """A headless Renode running alongside a `shell` test (`requires_sim: true`).
+
+    Renode is started with its monitor on a TCP port (`-P`, reachable from the host and
+    every container through the host network), then the resc is `include`d through that
+    monitor — waiting for the prompt to come back is what tells us the emulation is
+    loaded, and the reply is where load errors show up. Used as a context manager:
+
+        with BackgroundRenode(image, log_path, runtime) as sim:
+            sim.include(resc_host_path)        # raises RuntimeError on a resc error
+            sim.release()                      # free the monitor for the test
+            ... sim.port ...                   # the test talks to it here
+    """
+
+    _PROMPT = re.compile(r"\([^()\r\n]*\) $")         # "(monitor) ", "(mcu) "
+    _ERROR = re.compile(r"There was an error|Could not find file|Error E\d+")
+    _TELNET = re.compile(rb"\xff[\xfb-\xfe].|\xff[\xf0-\xfa]")
+
+    def __init__(self, image, log_path, runtime=None, timeout=120):
+        self.image, self.log_path, self.runtime, self.timeout = image, log_path, runtime, timeout
+        self.port = _free_port()
+        self.name = f"hector-sim-{os.getpid()}-{self.port}"
+        self._proc = self._sock = None
+
+    def __enter__(self):
+        argv = ["renode", "--disable-xwt", "--plain", "-P", str(self.port)]
+        os.makedirs(os.path.dirname(self.log_path) or ".", exist_ok=True)
+        if core.NO_DOCKER:
+            self._log = open(self.log_path, "w")
+            self._proc = subprocess.Popen(argv, cwd=core.execution_dir(),
+                                          stdout=self._log, stderr=subprocess.STDOUT)
+        else:
+            subprocess.run(["docker", "run", "-d", "--name", self.name, *_HOST_NETWORK,
+                            *_workspace_mount(), *_extra_mounts(), *_user_flags(),
+                            *_runtime_flags(self.runtime), self.image, *argv],
+                           check=True, stdout=subprocess.DEVNULL)
+        try:
+            self._connect()
+        except Exception:
+            self.__exit__(None, None, None)
+            raise
+        return self
+
+    def _connect(self):
+        deadline = time.monotonic() + self.timeout
+        while True:
+            try:
+                self._sock = socket.create_connection(("127.0.0.1", self.port), timeout=1)
+                break
+            except OSError:
+                if time.monotonic() > deadline:
+                    raise RuntimeError(f"Renode's monitor never opened on port {self.port}.")
+                time.sleep(0.2)
+        self._sock.settimeout(self.timeout)
+        self._read_prompt()
+
+    def _read_prompt(self):
+        buf = b""
+        while True:
+            chunk = self._sock.recv(4096)
+            if not chunk:
+                raise RuntimeError("Renode closed its monitor connection (did it crash?).")
+            buf += chunk
+            text = self._TELNET.sub(b"", buf).decode(errors="replace").replace("\r", "")
+            if self._PROMPT.search(text):
+                return text
+
+    def command(self, line):
+        """Run one monitor command; returns its output. Raises RuntimeError on an error."""
+        self._sock.sendall(f"{line}\n".encode())
+        out = self._read_prompt()
+        if self._ERROR.search(out):
+            raise RuntimeError(f"'{line}' failed:\n{out.strip()}")
+        return out
+
+    def include(self, resc_host_path):
+        path = (os.path.abspath(resc_host_path) if core.NO_DOCKER
+                else to_container_path(resc_host_path))
+        return self.command(f"include @{path}")
+
+    def release(self):
+        """Drop hector's monitor connection so the test can connect to the port."""
+        if self._sock:
+            self._sock.close()
+            self._sock = None
+
+    def __exit__(self, *exc):
+        self.release()
+        if core.NO_DOCKER:
+            if self._proc:
+                self._proc.terminate()
+                try:
+                    self._proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    self._proc.kill()
+                self._log.close()
+            return
+        with open(self.log_path, "w") as log:
+            subprocess.run(["docker", "logs", self.name], stdout=log, stderr=subprocess.STDOUT)
+        subprocess.run(["docker", "rm", "-f", self.name],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def _free_port():
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
 
 
 def run_renode_test(robot_file_host, image, results_dir_host,

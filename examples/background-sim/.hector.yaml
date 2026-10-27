@@ -1,0 +1,39 @@
+version: "0.1"
+renode_version: "1.16.1"
+
+# A `shell` test with `requires_sim: true` gets the emulation running in the
+# background for the whole test. Its steps reach it over the host network: Renode's
+# monitor is on $HECTOR_MONITOR_PORT (and tcp: mappings work the same way).
+
+arguments:
+  BIN: "https://dl.antmicro.com/projects/renode/zephyr-stm32f103-button.elf-s_276760-1bf32c99bbb3c01d81e13ca68118eaf08b2a815f"
+
+machines:
+  mcu:
+    platform:
+      - platforms/cpus/stm32f103.repl
+    firmware: ${BIN}
+    # The console, on localhost:3456 for the test (a `|` block is raw text, so no
+    # comments inside it).
+    mappings: |
+      usart2 -> tcp:3456:raw
+
+tests:
+  - name: Query the running emulation
+    type: shell
+    requires_sim: true
+    image: python:3.12-slim
+    steps:
+      - name: firmware symbols are loaded
+        script: |
+          python3 checks/monitor.py 'mach set "mcu"' 'sysbus GetSymbolAddress "main"' \
+            | grep -E '0x[0-9A-Fa-f]+'
+
+      - name: the CPU has been executing
+        script: |
+          python3 checks/monitor.py 'mach set "mcu"' 'cpu ExecutedInstructions' \
+            | grep -E '^0x[0-9A-Fa-f]*[1-9A-Fa-f]'
+
+      - name: the console is reachable
+        script: |
+          python3 -c 'import socket; socket.create_connection(("127.0.0.1", 3456), timeout=10).close()'

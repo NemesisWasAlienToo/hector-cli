@@ -29,12 +29,19 @@ _TRIGGER_TOP_KEYS = {"when", "cron", "reporters", "jobs", "fail_fast", "timeout"
 # Top-level keys defined by this schema version; anything else is flagged.
 _KNOWN_TOP_KEYS = {
     "version", "renode_version", "renode_image", "docker_args", "arguments", "matrix",
-    "modules", "hubs", "machines", "connections", "mappings", "build", "tests", "quantum",
+    "modules", "hubs", "machines", "connections", "mappings", "tests", "quantum",
     "artifacts",
 } | _TRIGGER_TOP_KEYS
 
 # Keys renamed in this schema version → new name (for a helpful migration hint).
-_RENAMED_TOP_KEYS = {"nodes": "machines", "setup": "build", "prepare": "build"}
+_RENAMED_TOP_KEYS = {"nodes": "machines"}
+
+# Removed top-level sections: an error, since silently skipping them (e.g. a firmware
+# fetch) would make every later test fail for a confusing reason.
+_BUILD_REMOVED = ("The 'build:' section was removed — move each entry into 'tests:' as a "
+                  "`type: shell` test (tests run in order, so put it first).")
+REMOVED_TOP_KEYS = {"build": _BUILD_REMOVED, "setup": _BUILD_REMOVED,
+                     "prepare": _BUILD_REMOVED}
 
 # Test types renamed this schema version → current name (old configs still run).
 _RENAMED_TEST_TYPES = {"bash": "shell", "docker": "shell"}
@@ -100,7 +107,9 @@ def validate_config(config) -> Tuple[List[Issue], List[Issue]]:
 
     # ---- unknown / renamed top-level keys ----
     for k in config:
-        if k in _RENAMED_TOP_KEYS:
+        if k in REMOVED_TOP_KEYS:
+            err(k, REMOVED_TOP_KEYS[k])
+        elif k in _RENAMED_TOP_KEYS:
             warn(k, f"'{k}:' was renamed to '{_RENAMED_TOP_KEYS[k]}:' — rename the "
                  "top-level key. This entry is ignored.")
         elif k not in _KNOWN_TOP_KEYS:
@@ -226,11 +235,10 @@ def validate_config(config) -> Tuple[List[Issue], List[Issue]]:
         if node_spec.get("artifacts") is not None:
             warn(f"{p}.artifacts", "Machine-level 'artifacts:' is not supported; "
                  "move it to the top-level 'artifacts:' section. This entry is ignored.")
-        # build is a top-level (global) key; per-machine entries are ignored.
         if node_spec.get("prepare") is not None or node_spec.get("build") is not None:
             key = "build" if node_spec.get("build") is not None else "prepare"
             warn(f"{p}.{key}", "Machine-level build/prepare is not supported; "
-                 "move it to the top-level 'build:' section. This entry is ignored.")
+                 "move it into 'tests:' as a `type: shell` test. This entry is ignored.")
 
     # ---- connections / mappings: parse each line for obvious errors ----
     _validate_connection_lines(config.get("connections", ""), "connections", err, warn)
@@ -249,22 +257,6 @@ def validate_config(config) -> Tuple[List[Issue], List[Issue]]:
     if artifacts_cfg is not None and not isinstance(artifacts_cfg, (list, str)):
         err("artifacts", "Must be a list of glob patterns or a block string, got "
             f"{type(artifacts_cfg).__name__}.")
-
-    # ---- build (top-level, global): pre-sim shell steps, same shape as shell tests ----
-    build_cfg = config.get("build")
-    if build_cfg is not None:
-        if not isinstance(build_cfg, list):
-            err("build", "Must be a list of build steps "
-                f"(each a mapping with image:/script:/steps:), got {type(build_cfg).__name__}.")
-        else:
-            for idx, block in enumerate(build_cfg):
-                bp = f"build[{idx}]"
-                if not isinstance(block, dict):
-                    err(bp, f"Each build step must be a mapping, got {type(block).__name__}.")
-                    continue
-                if block.get("image") is not None and not isinstance(block.get("image"), str):
-                    err(f"{bp}.image", "If set, 'image' must be a string (e.g. 'arm-gcc:13').")
-                _validate_shell_steps(block, bp, err, warn)
 
     # ---- tests ----
     tests_cfg = config.get("tests") or []

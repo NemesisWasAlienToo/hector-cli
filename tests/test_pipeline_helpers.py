@@ -62,6 +62,16 @@ def test_load_config_sets_config_dir(config_in_subdir, monkeypatch):
     assert core.EXTRA_MOUNTS == []            # inside the cwd mount already
 
 
+def test_load_config_rejects_removed_build_section(config_in_subdir, monkeypatch, capsys):
+    pipeline, core, root = config_in_subdir
+    (root / "board" / ".hector.yaml").write_text(
+        "renode_version: '1.16.1'\nbuild:\n  - script: 'true'\n")
+    monkeypatch.setattr(pipeline, "CONFIG_PATH", "board/.hector.yaml")
+    with pytest.raises(SystemExit):
+        pipeline.load_config_or_exit()
+    assert "type: shell" in capsys.readouterr().err
+
+
 def test_load_config_outside_cwd_is_mounted_too(config_in_subdir, monkeypatch):
     # Run from a sibling dir: the cwd stays the workspace mount, and ../board is
     # bind-mounted 1:1 so the config's paths and working dir are reachable.

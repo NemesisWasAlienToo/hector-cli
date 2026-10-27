@@ -30,7 +30,7 @@ REPORTERS = Registry("reporter")
 class StepResult:
     """Outcome of a single test step, passed to every reporter after the run."""
     name: str
-    type: str           # "robot", "shell", "build", …
+    type: str           # "robot", "shell", …
     passed: bool
     duration: float = 0.0
     commands: list = field(default_factory=list)  # script lines / commands run

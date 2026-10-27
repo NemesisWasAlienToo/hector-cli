@@ -3,7 +3,7 @@
 The conductor: CLI parsing and the per-job pipeline that ties the modules together.
 
 Phases per job:
-  1   build module types (modules.py)  +  run the global build steps
+  1   build module types (modules.py)
   1.5 instantiate peripherals, resolve mappings + connections, finalize repl/commands
   2   generate one emulation resc; then simulate / debug / test
   3   sweep artifacts
@@ -31,8 +31,8 @@ from .generator import (collect_artifacts, finalize_commands, generate_emulation
 from .hubs import HUBS
 from .modules import BuildContext, build_modules
 from .reporters import emit
-from .runners import RunnerContext, run_build_steps, run_tests
-from .validator import print_issues, validate_config
+from .runners import RunnerContext, run_tests
+from .validator import REMOVED_TOP_KEYS, print_issues, validate_config
 
 
 # ---------------------------------------------------------------------------
@@ -104,6 +104,12 @@ def load_config_or_exit():
     if not isinstance(config, dict):
         print(f"[ERROR] '{config_path}' must be a YAML mapping (got "
               f"{type(config).__name__}).", file=sys.stderr)
+        sys.exit(1)
+    removed = [k for k in REMOVED_TOP_KEYS if k in config]
+    if removed:
+        # Not just a warning: skipping e.g. a firmware fetch would fail every later test.
+        print(f"[ERROR] '{config_path}': '{removed[0]}:' — {REMOVED_TOP_KEYS[removed[0]]}",
+              file=sys.stderr)
         sys.exit(1)
     v = config.get("version")
     if v is not None and str(v) not in SUPPORTED_SCHEMA_VERSIONS:
@@ -189,7 +195,7 @@ def _needs_renode_source(config):
     `renode-verilator` modules (they compile against the Renode source) or to interpolate
     ${RENODE_DIR} / ${INTEGRATION_DIR}. The Renode binary itself comes from the Docker
     image, so plain machines, csharp modules (compiled by Renode / built against the
-    image's assemblies), build/shell steps and firmware URLs need neither checkout."""
+    image's assemblies), shell tests and firmware URLs need neither checkout."""
     for m in (config.get("modules") or {}).values():
         if (m.get("kind") or "renode-verilator") == "renode-verilator":
             return True
@@ -611,7 +617,7 @@ def action_test(state, cfg, result):
         results_dir=cfg.output_dir,
         runtime=state.runtime,
     )
-    # run_job combines these with the build results and emits the reports once.
+    # run_job emits the reports.
     result["test_results"] = run_tests(effective_tests, ctx, fail_fast=cfg.fail_fast)
 
 
@@ -637,7 +643,7 @@ def run_job(i, total_jobs, job_context, cfg):
     runtime = RuntimeOptions()
 
     try:
-        # ---- PHASE 1: build modules, run the global build steps ----
+        # ---- PHASE 1: build modules ----
         build_ctx = BuildContext(
             renode_dir_container=cfg.fw_vars["RENODE_DIR"],
             integration_dir_host=context.get("_integration_dir_host", ""),
@@ -646,15 +652,6 @@ def run_job(i, total_jobs, job_context, cfg):
         modules_registry = build_modules(modules_cfg, build_ctx)
         for mod in modules_registry.values():
             runtime.merge(mod.get("runtime"))
-
-        # Global build steps (compile firmware, fetch/generate files, ...) — run once per
-        # job, in containers, before the machines are built. Outputs land in the mounted
-        # project so the sim/tests pick them up. They report like tests (one StepResult
-        # each) and abort the job on the first failure. cfg.docker_image is the default.
-        build_blocks = interpolate(copy.deepcopy(cfg.config.get("build", [])), context)
-        build_results = run_build_steps(build_blocks, cfg.docker_image, cfg.output_dir,
-                                        live=cfg.live)
-        build_ok = all(r.passed for r in build_results)
 
         for node_name, node_config in concrete_nodes.items():
             if node_config.get("backend", "renode") != "renode":
@@ -722,6 +719,12 @@ def run_job(i, total_jobs, job_context, cfg):
             for cmd in descriptor.so_commands:
                 concrete_nodes[node_name].setdefault("_gen_commands", []).append(cmd)
 
+        # Per-machine mappings join the global ones, with bare peripheral names
+        # qualified by the machine they sit under.
+        for node_name, _nc in concrete_nodes.items():
+            mappings.extend(maps.qualify_node_mapping(l, node_name, known_nodes)
+                            for l in as_lines(_nc.get("mappings", "")))
+
         if mappings:
             map_lines, map_runtime = maps.resolve_mappings(mappings, concrete_nodes)
             emulation_setup += map_lines
@@ -770,7 +773,7 @@ def run_job(i, total_jobs, job_context, cfg):
         # ---- PHASE 2: generate resc (if any machines); simulate / test ----
         # A resc is only produced when machines are defined. The action still runs
         # without one: `run`/`export` error (they need a machine), while `test` runs
-        # any sim-independent tests (requires_sim: false) and skips the rest.
+        # shell tests without `requires_sim: true` and skips the rest.
         resc_filename = None
         if concrete_nodes:
             resc_root = os.path.join(ARTIFACTS_DIR, "resc")
@@ -780,21 +783,16 @@ def run_job(i, total_jobs, job_context, cfg):
                 list(concrete_nodes.items()), hubs_registry, cross_connections,
                 quantum_value, debug_config, resc_filename,
                 emulation_setup=emulation_setup, no_start=cfg.no_start,
+                search_dir=_core.execution_dir(),
             )
 
-        # A failed build aborts before the sim/tests — but its results are still
-        # reported, so the failure shows up in junit/manifest/html like a test.
-        if build_ok:
-            state = JobState(resc_filename=resc_filename, runtime=runtime,
-                             debug_config=debug_config, tests=tests,
-                             concrete_nodes=concrete_nodes)
-            cfg.action(state, cfg, result)
-        else:
-            print("\n[BUILD] a build step failed — skipping simulation/tests.")
+        state = JobState(resc_filename=resc_filename, runtime=runtime,
+                         debug_config=debug_config, tests=tests,
+                         concrete_nodes=concrete_nodes)
+        cfg.action(state, cfg, result)
 
-        # ---- PHASE 2.5: report (build steps + tests, together) ----
-        step_results = list(build_results) + (result.get("test_results") or [])
-        result["test_results"] = step_results
+        # ---- PHASE 2.5: report ----
+        step_results = result.get("test_results") or []
         if step_results:
             emit(step_results, cfg.output_dir, cfg.reporter_names)
             result["passed"] = result["passed"] and all(r.passed for r in step_results)

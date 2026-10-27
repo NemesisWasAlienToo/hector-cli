@@ -135,6 +135,19 @@ def tap_backend(node_name, peripheral, param, _node_config):
 
 
 # -------------------- resolver --------------------
+def qualify_node_mapping(line, node_name, known_nodes=()):
+    """Prefix the left side of a per-machine mapping line with the machine's name.
+    'usart2 -> tcp:3456' under machine 'mcu' becomes 'mcu.usart2 -> tcp:3456';
+    a left side already naming a known machine is left unchanged."""
+    if "->" not in line:
+        return line                     # resolve_mappings reports the error
+    lhs, rhs = line.split("->", 1)
+    lhs = lhs.strip()
+    if lhs.split(".", 1)[0] not in known_nodes or "." not in lhs:
+        lhs = f"{node_name}.{lhs}"
+    return f"{lhs} -> {rhs.strip()}"
+
+
 def resolve_mappings(mappings, concrete_nodes):
     """Process each mapping line; queue machine commands on nodes.
 

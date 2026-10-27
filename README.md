@@ -39,7 +39,6 @@ Licensed under **AGPL-3.0-or-later** — see [LICENSE](LICENSE) and
     - [artifacts](#artifacts)
   - [connections (global)](#connections-global)
   - [mappings (global)](#mappings-global)
-  - [build](#build)
   - [tests](#tests)
   - [quantum](#quantum)
   - [ci](#ci)
@@ -150,7 +149,7 @@ docker run --rm -it -u "$(id -u):$(id -g)" -e HOME=/tmp \
 
 Override the image tag with `HECTOR_IMAGE` (default `hector-renode:latest`).
 
-**Caveats of the in-image mode:** a `build:`/`shell` step's `image:` is ignored —
+**Caveats of the in-image mode:** a `shell` test's `image:` is ignored —
 the script runs in *this* image instead (a warning is printed), and module builds
 rely on this image's toolchain rather than a per-module one. Interactive `hector
 run` opens Renode's GUI, which needs X forwarding; pass `--renode-args '--console'`
@@ -455,15 +454,17 @@ hector run --renode-args '--hide-log --config my.conf'
 
 #### Paths and working directory
 
-Everything a hectorfile executes — `build:` steps, `shell` tests, Renode and `renode-test` — runs **in the hectorfile's folder**, and paths written in the file (`firmware:`, `platform:`, module `source:`, test `file:` / `snapshot:`, `file:` mappings, `artifacts:`, paths inside scripts and `commands:`) are **relative to that folder**. So `hector test -f boards/nucleo/.hector.yaml` behaves the same as running `hector test` inside `boards/nucleo/`.
+Everything a hectorfile executes — `shell` tests, Renode and `renode-test` — runs **in the hectorfile's folder**, and paths written in the file (`firmware:`, `platform:`, module `source:`, test `file:` / `snapshot:`, `file:` mappings, `artifacts:`, paths inside scripts and `commands:`) are **relative to that folder**. So `hector test -f boards/nucleo/.hector.yaml` behaves the same as running `hector test` inside `boards/nucleo/`.
 
 The directory you run hector from is mounted into the container (at the same path), and the container's working directory (`-w`) is the hectorfile's folder. If the hectorfile lives **outside** the directory you run from (`hector test -f ../other/.hector.yaml`), its folder is mounted as well, at its own path. (With [`--workspace-mount`](#overriding-the-workspace-mount-path---workspace-mount) the hectorfile's folder is mounted at the given path instead.) A path like `../shared/board.repl` works as long as it lands inside one of those mounts — for anything else, add a mount with [`docker_args`](#extra-docker-flags---docker-args). Under `--no-docker` the processes simply run with the hectorfile's folder as their cwd.
+
+**Relative `@paths` inside Renode.** The generated resc starts with `path add @<hectorfile's folder>`, so Renode looks up a relative `@path` in the hectorfile's folder first, then in its own install folder. That covers `platform:`/`firmware:`, your `resc:` and `commands:` lines (`sysbus LoadELF @fw/app.elf`, `include @scripts/setup.resc`) and `using "..."` inside `.repl` files — in `hector run` and in tests alike, even though renode-test starts Renode in its install folder. Paths that ship with Renode (`platforms/cpus/stm32f103.repl`) keep working, unless a file with the same relative path exists in the hectorfile's folder, which then takes precedence. Note that `$ORIGIN` is the generated resc's folder (`.hector/resc/`), not the hectorfile's.
 
 Paths given on the **command line** (`--output`, `--snapshot`, `--test-file`, `--artifacts`, `--renode-dir`, …) stay relative to where you run hector, and `.hector/` is still created there.
 
 #### Extra Docker flags (`--docker-args`)
 
-Add your own flags to every `docker run` hector starts — Renode, robot tests, `shell` tests, `build:` steps and module builds — e.g. to mount more directories or set environment variables. Declare them in `.hector.yaml` as a string or a list:
+Add your own flags to every `docker run` hector starts — Renode, robot tests, `shell` tests and module builds — e.g. to mount more directories or set environment variables. Declare them in `.hector.yaml` as a string or a list:
 
 ```yaml
 docker_args:
@@ -481,18 +482,22 @@ Use absolute host paths for `-v` (Docker treats a bare name as a named volume). 
 
 #### Container networking
 
-Every container hector starts — the Renode emulation (`run`), robot tests, `shell` tests, `build:` steps and module builds — runs with `--net=host`. GDB servers (`--debug`), `tcp:` mappings and anything a step listens on are reachable from the host on the same port, and steps can reach host services on `localhost`. No port publishing is involved.
+Every container hector starts — the Renode emulation (`run`), robot tests, `shell` tests and module builds — runs with `--net=host`. GDB servers (`--debug`), `tcp:` mappings and anything a step listens on are reachable from the host on the same port, and steps can reach host services on `localhost`. No port publishing is involved.
+
+#### Container user
+
+Containers run as **your UID:GID** (`-u`), so files they write into the project are yours, not root's. The image's own home folder belongs to its user (UID 1000 in the Renode image), so hector also sets `HOME=/tmp`. Without it, Renode can't create its user folder under any other UID and aborts at startup. To use a different home, set it in your docker args (`-e HOME=/some/dir`), and hector leaves it alone. Module builds run as root, and so does Renode when a mapping needs root (e.g. `tap`).
 
 #### Running without Docker (`--no-docker`)
 
-Call the locally installed `renode` and `renode-test` binaries directly instead of launching a Docker container. `build:` steps and `shell` tests also run on the host (their `image:` is ignored, with a warning), as do module builds.
+Call the locally installed `renode` and `renode-test` binaries directly instead of launching a Docker container. `shell` tests also run on the host (their `image:` is ignored, with a warning), as do module builds.
 
 ```bash
 hector run --no-docker
 hector test --no-docker
 ```
 
-Requires `renode` and `renode-test` to be on your `PATH` — and, since images are ignored, whatever toolchains your `build:`/`shell` scripts call (e.g. a compiler). **`--no-docker` and `--workspace-mount` are mutually exclusive** — they both control how the project root is made accessible and cannot be combined.
+Requires `renode` and `renode-test` to be on your `PATH` — and, since images are ignored, whatever toolchains your `shell` scripts call (e.g. a compiler). **`--no-docker` and `--workspace-mount` are mutually exclusive** — they both control how the project root is made accessible and cannot be combined.
 
 #### Overriding the Renode version (`--renode-version`)
 
@@ -530,7 +535,7 @@ Running a simulation does **not** need the Renode source — the binary and its 
 - it builds `modules:` (Verilated / C# co-simulated peripherals, which compile against the Renode source), or
 - it interpolates `${RENODE_DIR}` / `${INTEGRATION_DIR}`.
 
-For everything else — plain or YAML-defined machines, firmware URLs, `build:`/`shell` steps — nothing is cloned, so runs start immediately.
+For everything else — plain or YAML-defined machines, firmware URLs, `shell` tests — nothing is cloned, so runs start immediately.
 
 When the source *is* needed, point hector at a cached or shared checkout instead of re-cloning each time:
 
@@ -627,11 +632,10 @@ The configuration lives in `.hector.yaml`.
 | `renode_image` | Yes¹ | Full Renode Docker image to use instead of `antmicro/renode:<renode_version>` (e.g. a self-built `my-renode:dev`). See [custom Renode image](#using-a-custom-renode-image---renode-image). |
 | `docker_args` | No | Extra `docker run` flags (string or list) for every container, e.g. more `-v` mounts. See [extra Docker flags](#extra-docker-flags---docker-args). |
 | `arguments` | No | Scalar defaults, overridable by env var or `--set`. |
-| `build` | No | Pre-sim shell steps run once per job in containers (compile firmware, fetch/generate files, …). Interpolated with the job's arguments/matrix variables. |
 | `matrix` | No | Cross-product job expansion. |
 | `modules` | No | Verilated / C# peripheral type definitions. |
 | `hubs` | No | Emulation-level connection objects (uart, can, ethernet, gpio, usb, wireless, ble, wisun). |
-| `machines` | No | The machines to simulate. Optional: a config may be build-only or run sim-independent (`requires_sim: false`) shell tests. `run`/`export` and sim-backed tests require at least one. |
+| `machines` | No | The machines to simulate. Optional: a config may only run `shell` tests. `run`/`export`, robot tests and `requires_sim: true` shell tests require at least one. |
 | `connections` | No | Global signal wiring. |
 | `mappings` | No | Emulated peripheral → host resource bindings. |
 | `tests` | No | Test steps run by `hector test`. |
@@ -936,7 +940,7 @@ machines:
 | `firmware` | ELF file loaded with [`sysbus LoadELF`](https://renode.readthedocs.io/en/latest/basic/machines.html). Omit or set to `none` to skip. |
 | `peripherals` | Peripheral instances composed onto this machine. See below. |
 | `connections` | Signal wiring scoped to this machine. Covers GPIO, IRQ, and bracket-range connections. Bare peripheral names are accepted. |
-| `mappings` | Per-machine host resource bindings. Same syntax as global `mappings:`. |
+| `mappings` | Per-machine host resource bindings. Same syntax as global `mappings:`, but the machine name can be left out (`usart2 -> tcp:3456`). |
 | `resc` | Inline `.resc` monitor-script **text** (see [below](#inline-repl-and-resc)). |
 | `commands` | Raw [Renode monitor](https://renode.readthedocs.io/en/latest/basic/monitor-syntax.html) commands inserted into the resc after hardware loads. |
 
@@ -1013,6 +1017,9 @@ other field. Worked examples:
   and running against the pinned release image.
 - [`examples/nucleo-h753zi`](examples/nucleo-h753zi) — the other side: a board that
   **is** shipped, loaded via `using` and *patched* inline, booting Hubris.
+- [`examples/external-firmware-resc`](examples/external-firmware-resc) — firmware
+  fetched by a `shell` test and loaded from `resc:` by a path relative to the
+  hectorfile (`sysbus LoadELF @fw/button.elf`).
 
 #### peripherals
 
@@ -1221,38 +1228,6 @@ If the interface name is omitted, `tap0` is used. Requires `NET_ADMIN` capabilit
 
 ---
 
-### build
-
-Pre-simulation steps that produce the inputs a run/test needs — compile firmware, fetch a binary, generate a file. Each step runs **in a container** with the project bind-mounted (the same engine as the `shell` test type), once per job, *before* the machines are built. Steps run in order and the job aborts on the first failure (the sim depends on their output).
-
-```yaml
-build:
-  - name: Compile firmware
-    image: arm-gcc:13                 # a toolchain image — no Renode involved
-    steps:
-      - script: make -C firmware
-
-  - name: Fetch bootloader            # no image → the run's renode image (logged)
-    script: |
-      wget -O boot.bin https://example.com/boot.bin
-
-machines:
-  mcu:
-    firmware: firmware/build/app.elf   # the build output, read straight back
-```
-
-Same shape as a `shell` test (`name`, optional `image`, and `steps:` or a single-step `script:`). Build steps and the sim/tests all share the one bind-mounted project directory at the same path, so **a file a build step writes is simply there for the sim and tests** — reference it by its normal path, no copying or declaration. Under `--no-docker`, build steps run on the host (image ignored).
-
-Build steps **report like tests**: each block becomes one entry (`type: "build"`) in the JUnit/JSON reports with its own `report.html`, alongside the test results. A failing build step marks the job failed and skips the simulation/tests.
-
-> **Migration:** `build:` replaces the old host-side `prepare:` script. A one-line
-> `prepare:` becomes a one-step `build:` (no `image:` → runs in the renode image, which
-> has the usual shell tools). Old `prepare:`/`setup:` keys still parse, with a rename
-> warning.
-
-> **Tip:** containers may write build outputs as `root`. If later host steps (git, rm)
-> trip on ownership, that's the known cause; gitignore generated outputs like `.hector/`.
-
 ---
 
 ### tests
@@ -1275,9 +1250,42 @@ tests:
 ```
 
 There are two test types: **`robot`** (boots the emulation and drives it with Robot
-Framework) and **`shell`** (runs a shell script in a container). By default every
-test runs *after* the simulation; a `shell` test that doesn't need Renode can opt out
-with `requires_sim: false` (see below).
+Framework) and **`shell`** (runs a shell script in a container). A `shell` test runs
+without an emulation unless it sets `requires_sim: true`, which runs the emulation in
+the background for it (see below).
+
+#### Preparing inputs (compile, fetch, generate)
+
+There is no separate build section: inputs the sim needs — compiled firmware, a
+downloaded binary, a generated file — are produced by a `shell` test placed **before**
+the tests that use them. Tests run in order and share the bind-mounted project at the
+same path, so a file one test writes is simply there for the next one:
+
+```yaml
+machines:
+  mcu:
+    firmware: firmware/build/app.elf   # produced by the first test
+
+tests:
+  - name: Compile firmware
+    type: shell
+    image: arm-gcc:13                  # a toolchain image — no Renode involved
+    script: make -C firmware
+
+  - name: Firmware boots
+    type: robot
+    script: |
+      Create Terminal Tester    sysbus.usart2
+      Wait For Line On Uart     Board initialized    timeout=30
+```
+
+A failing preparation test doesn't stop the later ones unless you pass `--fail-fast`.
+`hector run` only starts the simulation and runs no tests, so prepare inputs with
+`hector test` (or by hand) first.
+
+> **Migration:** the top-level `build:` section (and the older `prepare:`/`setup:`)
+> was removed and is now a config error. Move each entry to the start of `tests:` as a
+> `type: shell` test — the shape (`name`, `image`, `script:`/`steps:`) is the same.
 
 #### type: robot
 
@@ -1391,20 +1399,42 @@ Each step's `script` runs **inside a one-off Docker container** with the project
 - **`image:` is optional.** Omit it to use the run's renode image (which already has `python`/`wget`/shell tools) — hector logs which image it picked. Set it to pin a specific toolchain.
 - **`--no-docker`** runs the script on the host instead, ignoring `image:` (with a warning). See [Running without Docker](#running-without-docker---no-docker).
 
-##### `requires_sim: false`
+##### `requires_sim: true` — the emulation in the background
 
-By default a `shell` test runs after the simulation and counts as needing it. Set `requires_sim: false` for a check that's independent of Renode (lint a file, validate a generated artifact, run a host tool). Such a test runs even when the config defines **no machines at all** — handy for build-and-check pipelines:
+By default a `shell` test runs without Renode (compile, fetch, lint, check a file), so it
+also works when the config defines **no machines at all**. Set `requires_sim: true` to
+run the test **against a live emulation**:
 
 ```yaml
-- name: Lint the generated config
+- name: Talk to the running firmware
   type: shell
-  requires_sim: false
+  requires_sim: true
   image: python:3.12-slim
   script: |
-    python3 -m yamllint .hector.yaml
+    python3 checks/monitor.py 'mach set "mcu"' 'sysbus GetSymbolAddress "main"'
 ```
 
-A test that needs the simulation but finds no machine defined is skipped and marked failed, with a note telling you to add a machine or set `requires_sim: false`.
+For such a test hector:
+
+1. starts Renode headless in the background (its own container, same image, mounts,
+   `docker_args` and host network as `hector run`; on the host under `--no-docker`),
+2. loads the generated resc through Renode's monitor and waits until it's done — a
+   resc error (e.g. a missing ELF) fails the test before any step runs,
+3. runs the steps with **`HECTOR_MONITOR_PORT`** set to the monitor's TCP port,
+4. stops Renode after the last step and saves its log as `renode.log` next to the
+   test's `report.html`.
+
+Steps reach the emulation over the host network: the monitor on
+`localhost:$HECTOR_MONITOR_PORT` (send a newline first to get a prompt — only the
+first client gets a banner), plus any `tcp:` [mappings](#mappings) — e.g.
+`usart2 -> tcp:3456:raw` under the machine puts its console on `localhost:3456`. A
+`pty` mapping won't work here: the pty exists only inside Renode's container. With
+`--snapshot` (or a test `snapshot:`), the snapshot is loaded and started instead of
+the resc. See [`examples/background-sim`](examples/background-sim) for a working
+monitor client.
+
+A test that needs the emulation but finds no machine defined is skipped and marked
+failed.
 
 > **Migration:** the old `bash` and `docker` test types are now both `shell` (a `bash`
 > step → a `shell` step running on the host under `--no-docker`; a `docker` step → a
@@ -1553,12 +1583,11 @@ Everything the framework generates lives under `.hector/` and is safe to delete 
     └── job_<N>_test_<M>.robot    # generated Robot Framework wrappers
 
 results/                           # test + simulation output (override with --output)
-├── build_0_<name>/                # one directory per build: step (reported like a test)
-│   └── report.html
 ├── test_0_<name>/                 # one directory per test (robot / shell alike)
 │   ├── report.html               # human-readable report (all test types)
 │   ├── log.html                  # robot only: full interactive log
-│   └── robot_output.xml          # robot only: native Robot Framework XML
+│   ├── robot_output.xml          # robot only: native Robot Framework XML
+│   └── renode.log                # shell + requires_sim: true only: the emulation's log
 ├── test_1_<name>/
 │   └── report.html
 ├── artifacts/                     # files collected by the top-level 'artifacts:' globs
@@ -1587,12 +1616,6 @@ matrix:
 arguments:
   BOARD: stm32f4_discovery
   FW: stm32f4_test.elf
-
-# Pre-sim build steps, run once per job (in containers) before the machines are built.
-build:
-  - name: Fetch firmware
-    script: |                         # no image → the run's renode image (has wget)
-      wget -q https://example.com/${FW} -O ${FW}
 
 artifacts:
   - results/*.log
@@ -1635,6 +1658,12 @@ connections: |
   boardA.gpioPortA@7 -> irqline -> boardB.gpioPortB@4
 
 tests:
+  # Tests run in order: prepare inputs first.
+  - name: Fetch firmware
+    type: shell
+    script: |                         # no image → the run's renode image (has wget)
+      wget -q https://example.com/${FW} -O ${FW}
+
   - name: Firmware boots
     type: robot
     script: |

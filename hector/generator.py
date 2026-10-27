@@ -166,7 +166,7 @@ def finalize_commands(concrete_nodes):
 
 def generate_emulation_resc(renode_nodes, hubs_registry, cross_connections,
                             quantum, debug_config, output_filename, emulation_setup=None,
-                            no_start=False):
+                            no_start=False, search_dir=None):
     """One resc per job: every node becomes a named machine in one emulation; hubs and
     cross-machine connectors wire them; one shared `start`.
 
@@ -177,8 +177,14 @@ def generate_emulation_resc(renode_nodes, hubs_registry, cross_connections,
                       (e.g. CreateServerSocketTerminal, CreateUartPtyTerminal)
     no_start        : omit the trailing `start` so the platform loads paused and the
                       user starts it by hand from the monitor (`hector run --no-start`)
+    search_dir      : directory prepended to Renode's search path (`path add`), so
+                      relative `@paths` resolve against it first — the config's directory,
+                      whatever directory Renode was started in (renode-test starts it in
+                      its install dir). Renode's own dirs stay searched after it.
     """
     lines = []
+    if search_dir:
+        lines.append("path add @" + search_dir.replace(" ", "\\ "))   # Renode escapes spaces
 
     # --- emulation-level setup (terminals, etc.) – must exist before machines connect ---
     if emulation_setup:

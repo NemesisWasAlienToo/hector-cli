@@ -1,6 +1,8 @@
 """Unit tests for pure helpers in hector.runners: extra-arg parsing, step
-normalization, results-dir slugging, output escaping, and sim-requirement logic.
-The actual robot/shell execution (which needs Renode/Docker) is not exercised."""
+normalization, results-dir slugging, output escaping, and sim-requirement logic, plus
+the shell runner's background-sim flow with Renode/Docker faked out."""
+
+import pytest
 
 from hector.runners import (TEST_RUNNERS, _needs_sim, _normalize_steps,
                             _parse_extra_args, _render_output_pre, _test_results_dir)
@@ -71,13 +73,83 @@ def test_robot_always_needs_sim():
     assert _needs_sim({"type": "robot"}) is True
 
 
-def test_shell_defaults_to_needing_sim():
-    assert _needs_sim({"type": "shell"}) is True
+def test_shell_defaults_to_no_sim():
+    # A shell test (fetch/compile/check) runs without a sim unless it asks for one.
+    assert _needs_sim({"type": "shell"}) is False
 
 
-def test_shell_can_opt_out():
-    assert _needs_sim({"type": "shell", "requires_sim": False}) is False
+def test_shell_can_opt_in():
+    assert _needs_sim({"type": "shell", "requires_sim": True}) is True
 
 
-def test_renamed_bash_type_still_needs_sim_by_default():
-    assert _needs_sim({"type": "bash"}) is True
+def test_renamed_bash_type_defaults_to_no_sim():
+    assert _needs_sim({"type": "bash"}) is False
+
+
+# ---- shell test with requires_sim: true ----
+
+class _FakeSim:
+    """Stands in for BackgroundRenode; records what the runner asks of it."""
+    calls = []
+
+    def __init__(self, image, log_path, runtime=None):
+        self.port = 4567
+        _FakeSim.calls.append(("start", image, log_path))
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        _FakeSim.calls.append(("stop",))
+
+    def include(self, resc):
+        _FakeSim.calls.append(("include", resc))
+
+    def command(self, line):
+        _FakeSim.calls.append(("command", line))
+
+    def release(self):
+        _FakeSim.calls.append(("release",))
+
+
+@pytest.fixture
+def shell_env(monkeypatch, tmp_path):
+    from hector import runners
+    monkeypatch.chdir(tmp_path)
+    _FakeSim.calls = []
+    steps_seen = []
+    monkeypatch.setattr(runners, "BackgroundRenode", _FakeSim)
+    monkeypatch.setattr(runners, "run_in_container",
+                        lambda script, image, live, env=None:
+                        steps_seen.append(env) or ("ok", True))
+    ctx = runners.RunnerContext(resc_host_path="job.resc", job_index=1, image="img")
+    return runners, ctx, steps_seen
+
+
+def test_requires_sim_runs_steps_inside_a_background_sim(shell_env):
+    runners, ctx, steps_seen = shell_env
+    test = {"name": "t", "type": "shell", "requires_sim": True}
+    [res] = runners._run_shell_test(test, [{"script": "true"}], ctx, 0)
+    assert res.passed
+    kinds = [c[0] for c in _FakeSim.calls]
+    assert kinds == ["start", "include", "release", "stop"]
+    assert steps_seen == [{"HECTOR_MONITOR_PORT": 4567}]
+    assert res.artifacts["renode_log"].endswith("renode.log")
+
+
+def test_shell_without_requires_sim_starts_nothing(shell_env):
+    runners, ctx, steps_seen = shell_env
+    [res] = runners._run_shell_test({"name": "t", "type": "shell"}, [{"script": "true"}], ctx, 0)
+    assert res.passed and _FakeSim.calls == [] and steps_seen == [None]
+
+
+def test_sim_start_failure_fails_the_test(shell_env, monkeypatch):
+    runners, ctx, steps_seen = shell_env
+
+    def boom(self, resc):
+        raise RuntimeError("'include @job.resc' failed")
+    monkeypatch.setattr(_FakeSim, "include", boom)
+    [res] = runners._run_shell_test({"name": "t", "type": "shell", "requires_sim": True},
+                                    [{"script": "true"}], ctx, 0)
+    assert not res.passed and steps_seen == []
+    assert ("stop",) in _FakeSim.calls               # the sim is still torn down

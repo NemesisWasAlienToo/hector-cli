@@ -169,7 +169,13 @@ def test_runtime_flags_all_devices_absent_yields_nothing(monkeypatch):
 
 def test_user_flags_maps_host_uid(monkeypatch):
     monkeypatch.setattr(core, "host_uid_gid", lambda: (1000, 1000))
-    assert docker._user_flags() == ["-u", "1000:1000"]
+    assert docker._user_flags() == ["-u", "1000:1000", "-e", "HOME=/tmp"]
+
+
+def test_user_flags_keep_a_home_from_docker_args(monkeypatch):
+    monkeypatch.setattr(core, "host_uid_gid", lambda: (1234, 1234))
+    monkeypatch.setattr(core, "DOCKER_ARGS", ["-e", "HOME=/work/home"])
+    assert docker._user_flags() == ["-u", "1234:1234"]
 
 
 def test_user_flags_empty_without_uid(monkeypatch):

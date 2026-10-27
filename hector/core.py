@@ -67,7 +67,7 @@ class Registry:
 # ==========================================================================
 # CONSTANTS
 # ==========================================================================
-TOOL_VERSION = "0.7.1"
+TOOL_VERSION = "0.8.0"
 SUPPORTED_SCHEMA_VERSIONS = {"0.1"}
 
 RENODE_REPO_URL = "https://github.com/renode/renode.git"

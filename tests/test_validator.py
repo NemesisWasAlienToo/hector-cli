@@ -86,6 +86,13 @@ def test_renamed_top_level_key_warns():
     assert any("machines" in w.message for w in warnings if w.path == "nodes")
 
 
+@pytest.mark.parametrize("key", ["build", "setup", "prepare"])
+def test_removed_build_section_is_error(key):
+    # Silently skipping it (e.g. a firmware fetch) would break every later test.
+    errors, _ = validate_config(_base(**{key: [{"name": "x", "script": "true"}]}))
+    assert any(i.path == key and "type: shell" in i.message for i in errors)
+
+
 # ---- machine schema: platform / repl / resc ----
 
 def test_platform_must_be_a_list():

@@ -1,0 +1,47 @@
+version: "0.1"
+renode_version: "1.16.1"
+
+# Firmware that comes from OUTSIDE the generated resc: the first test downloads it next
+# to this file, and the machine's `resc:` loads it by a path relative to this file -
+# not via `firmware:`, so hector does nothing to the path.
+#
+# Relative `@paths` in the resc are resolved by Renode, not by hector.
+#
+# `hector run` only starts the sim, so run `hector test` once first to fetch fw/.
+
+arguments:
+  FW_URL: "https://dl.antmicro.com/projects/renode/zephyr-stm32f103-button.elf-s_276760-1bf32c99bbb3c01d81e13ca68118eaf08b2a815f"
+
+machines:
+  mcu:
+    platform:
+      - platforms/cpus/stm32f103.repl     # shipped in the Renode image
+
+    # No `firmware:` - the resc loads it itself, relative to this hectorfile.
+    resc: |
+      sysbus LoadELF @fw/button.elf
+
+    commands: |
+      showAnalyzer usart2
+
+tests:
+  # Tests run in order: fetch the firmware before anything boots it.
+  - name: Fetch firmware
+    type: shell
+    image: alpine:latest
+    steps:
+      - name: download into fw/
+        script: |
+          mkdir -p fw
+          wget -q -O fw/button.elf "${FW_URL}"
+          ls -l fw
+
+  - name: Firmware loaded from the resc boots
+    type: robot
+    steps:
+      - name: The ELF from fw/ is loaded
+        script: |
+          Execute Command           mach set "mcu"
+          # Symbols only exist if `LoadELF @fw/button.elf` found the file.
+          ${addr}=    Execute Command    sysbus GetSymbolAddress "main"
+          Should Match Regexp       ${addr}    0x[0-9A-Fa-f]+

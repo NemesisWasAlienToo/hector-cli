@@ -4,7 +4,7 @@ queues machine commands, collects emulation setup, and merges runtime requiremen
 import pytest
 
 from hector import core
-from hector.mappings import MAPPING_BACKENDS, resolve_mappings
+from hector.mappings import MAPPING_BACKENDS, qualify_node_mapping, resolve_mappings
 
 
 @pytest.fixture(autouse=True)
@@ -100,3 +100,12 @@ def test_resolve_non_renode_node():
 def test_resolve_unknown_backend():
     with pytest.raises(KeyError):
         resolve_mappings(["mcu.uart4 -> bogus:1"], _nodes("mcu"))
+
+
+@pytest.mark.parametrize("line,expected", [
+    ("usart2 -> tcp:3456", "mcu.usart2 -> tcp:3456"),
+    ("mcu.usart2 -> tcp:3456:raw", "mcu.usart2 -> tcp:3456:raw"),
+    ("other.uart1->file:x.log", "other.uart1 -> file:x.log"),
+])
+def test_qualify_node_mapping(line, expected):
+    assert qualify_node_mapping(line, "mcu", {"mcu", "other"}) == expected
