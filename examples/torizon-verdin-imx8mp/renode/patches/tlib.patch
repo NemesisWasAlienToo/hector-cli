@@ -1,0 +1,65 @@
+diff --git a/arch/arm64/helper.c b/arch/arm64/helper.c
+index a71ccaf8..98a71c91 100644
+--- a/arch/arm64/helper.c
++++ b/arch/arm64/helper.c
+@@ -1322,14 +1322,37 @@ uint32_t establish_interrupts_target_el(uint32_t current_el, uint64_t scr_el3, u
+     tlib_assert_not_reached();
+ }
+ 
++//  Routing of each physical asynchronous exception type is controlled by its own SCR_EL3 bit (IRQ, FIQ, EA),
++//  but 'establish_interrupts_target_el' only models uniform routing. Evaluate it as if the other routing bits
++//  were set like the one of the requested type (e.g. TF-A routes only FIQs to EL3 around PSCI suspend).
++static uint64_t scr_el3_routing_for(uint64_t scr_el3, uint64_t type_bit)
++{
++    const uint64_t routing_bits = SCR_IRQ | SCR_FIQ | SCR_EA;
++    return (scr_el3 & type_bit) ? (scr_el3 | routing_bits) : (scr_el3 & ~routing_bits);
++}
++
+ int process_interrupt_v8a_aarch64(int interrupt_request, CPUState *env, uint64_t scr_el3, uint64_t hcr_el2)
+ {
+     tlib_assert(is_a64(env));
+ 
++    bool fiq_requested = interrupt_request & CPU_INTERRUPT_FIQ;
++    bool irq_requested = interrupt_request & CPU_INTERRUPT_HARD;
++    if(fiq_requested && irq_requested && !!(scr_el3 & SCR_FIQ) != !!(scr_el3 & SCR_IRQ)) {
++        //  Differently routed physical FIQ and IRQ: try FIQ first, as below
++        return process_interrupt_v8a_aarch64(interrupt_request & ~CPU_INTERRUPT_HARD, env, scr_el3, hcr_el2) ||
++               process_interrupt_v8a_aarch64(interrupt_request & ~CPU_INTERRUPT_FIQ, env, scr_el3, hcr_el2);
++    }
++    uint64_t routing_scr_el3 = scr_el3;
++    if(fiq_requested) {
++        routing_scr_el3 = scr_el3_routing_for(scr_el3, SCR_FIQ);
++    } else if(irq_requested) {
++        routing_scr_el3 = scr_el3_routing_for(scr_el3, SCR_IRQ);
++    }
++
+     uint32_t current_el = arm_current_el(env);
+     uint32_t target_el = 1;
+ 
+-    target_el = establish_interrupts_target_el(current_el, scr_el3, hcr_el2);
++    target_el = establish_interrupts_target_el(current_el, routing_scr_el3, hcr_el2);
+ 
+     if(target_el == IRQ_IGNORED) {
+         return 0;
+diff --git a/arch/arm64/translate-a64.c b/arch/arm64/translate-a64.c
+index b5edc31a..524f75ad 100644
+--- a/arch/arm64/translate-a64.c
++++ b/arch/arm64/translate-a64.c
+@@ -3977,7 +3977,8 @@ static void disas_ldst_single_struct(DisasContext *s, uint32_t insn)
+     clean_addr = gen_mte_checkN(s, tcg_rn, !is_load, is_postidx || rn != 31, total);
+     mop = finalize_memop(s, scale);
+ 
+-    tcg_ebytes = tcg_constant_i64(1 << scale);
++    /* Must survive the branches the per-element memory accesses may emit (like in disas_ldst_multiple_struct) */
++    tcg_ebytes = tcg_const_local_i64(1 << scale);
+     for(xs = 0; xs < selem; xs++) {
+         if(replicate) {
+             /* Load and replicate to all elements */
+@@ -3997,6 +3998,7 @@ static void disas_ldst_single_struct(DisasContext *s, uint32_t insn)
+         tcg_gen_add_i64(clean_addr, clean_addr, tcg_ebytes);
+         rt = (rt + 1) % 32;
+     }
++    tcg_temp_free_i64(tcg_ebytes);
+ 
+     if(is_postidx) {
+         if(rm == 31) {

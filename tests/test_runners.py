@@ -79,14 +79,14 @@ def test_shell_defaults_to_no_sim():
 
 
 def test_shell_can_opt_in():
-    assert _needs_sim({"type": "shell", "requires_sim": True}) is True
+    assert _needs_sim({"type": "shell", "requires-machine": True}) is True
 
 
 def test_renamed_bash_type_defaults_to_no_sim():
     assert _needs_sim({"type": "bash"}) is False
 
 
-# ---- shell test with requires_sim: true ----
+# ---- shell test with requires-machine: true ----
 
 class _FakeSim:
     """Stands in for BackgroundRenode; records what the runner asks of it."""
@@ -126,9 +126,9 @@ def shell_env(monkeypatch, tmp_path):
     return runners, ctx, steps_seen
 
 
-def test_requires_sim_runs_steps_inside_a_background_sim(shell_env):
+def test_requires_machine_runs_steps_inside_a_background_sim(shell_env):
     runners, ctx, steps_seen = shell_env
-    test = {"name": "t", "type": "shell", "requires_sim": True}
+    test = {"name": "t", "type": "shell", "requires-machine": True}
     [res] = runners._run_shell_test(test, [{"script": "true"}], ctx, 0)
     assert res.passed
     kinds = [c[0] for c in _FakeSim.calls]
@@ -137,7 +137,7 @@ def test_requires_sim_runs_steps_inside_a_background_sim(shell_env):
     assert res.artifacts["renode_log"].endswith("renode.log")
 
 
-def test_shell_without_requires_sim_starts_nothing(shell_env):
+def test_shell_without_requires_machine_starts_nothing(shell_env):
     runners, ctx, steps_seen = shell_env
     [res] = runners._run_shell_test({"name": "t", "type": "shell"}, [{"script": "true"}], ctx, 0)
     assert res.passed and _FakeSim.calls == [] and steps_seen == [None]
@@ -149,7 +149,7 @@ def test_sim_start_failure_fails_the_test(shell_env, monkeypatch):
     def boom(self, resc):
         raise RuntimeError("'include @job.resc' failed")
     monkeypatch.setattr(_FakeSim, "include", boom)
-    [res] = runners._run_shell_test({"name": "t", "type": "shell", "requires_sim": True},
+    [res] = runners._run_shell_test({"name": "t", "type": "shell", "requires-machine": True},
                                     [{"script": "true"}], ctx, 0)
     assert not res.passed and steps_seen == []
     assert ("stop",) in _FakeSim.calls               # the sim is still torn down
@@ -199,3 +199,10 @@ def test_shell_test_passes_its_own_docker_flags(monkeypatch, tmp_path):
             "docker-flags": ["--device=/dev/ttyUSB0", "-e X=1"]}
     runners.run_tests([{**test, "steps": [{"name": "s", "script": "true"}]}], ctx)
     assert seen == [["--device=/dev/ttyUSB0", "-e", "X=1"]]
+
+
+def test_prepare_without_results_dir_writes_no_report(prepare_env, tmp_path):
+    runners, runs, _ = prepare_env
+    [res] = runners.run_prepare_steps([{"name": "a", "script": "a"}], None)
+    assert res.passed and res.artifacts == {}
+    assert list(tmp_path.iterdir()) == []

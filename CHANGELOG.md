@@ -4,6 +4,29 @@ All notable changes to `hector-cli`. Versions follow [semver](https://semver.org
 while hector is 0.x, a minor version may contain breaking changes (marked
 **Breaking**).
 
+## 0.11.0 — 2026-10-27
+
+### Added
+- `examples/torizon-verdin-imx8mp`: the official Torizon OS image booting to its login
+  prompt on an emulated Toradex Verdin iMX8M Plus, with a patched Renode built in
+  `prepare:`.
+- CI job `examples`: runs `hector test` on the quick examples against real Docker and
+  Renode, through a Docker-in-Docker service.
+
+### Changed
+- **Breaking:** schema version `"0.2"`. A `version: "0.1"` config is an error that lists
+  what changed; set `version: "0.2"` after migrating.
+- **Breaking:** `requires_sim` is renamed to `requires-machine`; the old key is an error
+  with the fix.
+- `hector run` writes no reports (no `junit.xml`, no prepare `report.html`); prepare
+  output stays in the terminal. Use `hector test` for reports.
+- With a remote Docker daemon (`DOCKER_HOST=tcp://…`, e.g. CI's DinD), hector connects
+  to the background sim's monitor on that host instead of `localhost`.
+
+### Fixed
+- `requires-machine: true` under `--no-docker` crashed (the monitor port was passed to
+  the environment as a number).
+
 ## 0.10.0 — 2026-10-27
 
 ### Added

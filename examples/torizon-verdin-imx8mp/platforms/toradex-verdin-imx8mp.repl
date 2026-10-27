@@ -1,0 +1,80 @@
+// Toradex Verdin iMX8M Plus Quad 2GB (product 0061, no Wi-Fi/BT) system on module
+// For the 4 GiB SKU use toradex-verdin-imx8mp-4gb.repl (needs ~5+ GiB of host RAM).
+using "platforms/cpus/nxp-mimx8ml.repl"
+
+// 2 GiB LPDDR4 at 0x40000000. U-Boot sizes DRAM with get_ram_size() and passes it to Linux.
+memory_ddr:
+    size: 0x80000000
+
+memory_ddr_cortexA_cluster:
+    size: 0x40000000
+
+// Instructions per virtual second. Renode's default (100 MIPS) makes Torizon need ~65 s of virtual time
+// before systemd takes over the watchdog, so U-Boot's 60 s watchdog resets the board. Higher values make
+// every busy-wait (U-Boot's autoboot countdown, udelay) proportionally more expensive to emulate, since
+// counter polling runs ~13x slower than regular code. 400 MIPS reaches the takeover in ~18 s.
+cpu0:
+    PerformanceInMips: 400
+
+cpu1:
+    PerformanceInMips: 400
+
+cpu2:
+    PerformanceInMips: 400
+
+cpu3:
+    PerformanceInMips: 400
+
+// SDMA instead of PIO: Linux sdhci-esdhc-imx busy-waits 100 us per block in PIO mode
+usdhc2:
+    dmaSupported: true
+
+usdhc3:
+    dmaSupported: true
+
+gpt1:
+    frequency: 24000000
+
+gpt2:
+    frequency: 24000000
+
+gpt3:
+    frequency: 24000000
+
+gpt4:
+    frequency: 24000000
+
+gpt5:
+    frequency: 24000000
+
+gpt6:
+    frequency: 24000000
+
+// Gigabit Ethernet PHY (KSZ9131) on the EQOS MAC
+phy_qos: Network.EthernetPhysicalLayer @ eth_qos 7
+    Id1: 0x0022
+    Id2: 0x1642
+    AutoNegotiationAdvertisement: 0x1e1
+    AutoNegotiationLinkPartnerBasePageAbility: 0x1e1
+    MasterSlaveControl: 0x300
+    MasterSlaveStatus: 0x3000
+
+// Second Ethernet PHY on the FEC MAC (Verdin Development Board)
+phy_mac: Network.EthernetPhysicalLayer @ eth_mac 7
+    Id1: 0x0022
+    Id2: 0x1622
+    AutoNegotiationAdvertisement: 0x1e1
+    AutoNegotiationLinkPartnerBasePageAbility: 0x1e1
+    MasterSlaveControl: 0x300
+    MasterSlaveStatus: 0x3000
+
+// On-module I2C (i2c1)
+pmic: Mocks.DummyI2CSlave @ i2c1 0x25 // pca9450c
+rtc: Mocks.DummyI2CSlave @ i2c1 0x32 // rx8130
+temp_sensor: Mocks.DummyI2CSlave @ i2c1 0x48 // tmp1075
+adc: Mocks.DummyI2CSlave @ i2c1 0x49 // ads1015
+module_eeprom: Mocks.DummyI2CSlave @ i2c1 0x50 // 24c02
+
+sysbus:
+    init add:
+        Tag <0x30350440 0x4> "OCOTP_TESTER3" 0x00000500 // 1800 MHz Speed grade

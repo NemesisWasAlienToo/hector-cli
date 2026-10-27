@@ -276,3 +276,17 @@ def test_load_config_rejects_the_renode_short_form(config_in_subdir, monkeypatch
     with pytest.raises(SystemExit):
         pipeline.load_config_or_exit()
     assert 'image: "1.16.1"' in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("text,needle", [
+    ("version: '0.1'\nrenode:\n  image: '1.16.1'\n", "set version: \"0.2\""),
+    ("renode:\n  image: '1.16.1'\ntests:\n  - {type: shell, requires_sim: true}\n",
+     "requires-machine"),
+])
+def test_load_config_rejects_old_schema(config_in_subdir, monkeypatch, capsys, text, needle):
+    pipeline, core, root = config_in_subdir
+    (root / "board" / ".hector.yaml").write_text(text)
+    monkeypatch.setattr(pipeline, "CONFIG_PATH", "board/.hector.yaml")
+    with pytest.raises(SystemExit):
+        pipeline.load_config_or_exit()
+    assert needle in capsys.readouterr().err

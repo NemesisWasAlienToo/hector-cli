@@ -71,7 +71,7 @@ def test_prepare_steps_validate_like_shell_steps():
     assert errors == [] and warnings == []
 
 
-@pytest.mark.parametrize("key", ["requires_sim", "type"])
+@pytest.mark.parametrize("key", ["requires-machine", "type"])
 def test_prepare_steps_cannot_start_the_sim(key):
     errors, _ = validate_config({"renode": {"image": "1.16.1"},
                                  "prepare": [{"name": "x", "script": "true", key: True}]})
@@ -213,3 +213,15 @@ def test_obsolete_ci_block_now_warns_as_unknown():
     # The nested `ci:` schema was removed; it must now read as an unknown top-level key.
     _errors, warnings = validate_config(_base(ci={"hil": {"when": {}}}))
     assert any(w.path == "ci" for w in warnings)
+
+
+def test_schema_0_1_is_error_with_the_changes():
+    errors, _ = validate_config({"version": "0.1", "renode": {"image": "1.16.1"}})
+    assert [e.path for e in errors] == ["version"]
+    assert "renode:" in errors[0].message and "requires-machine" in errors[0].message
+
+
+def test_requires_sim_is_renamed():
+    errors, _ = validate_config({"renode": {"image": "1.16.1"}, "tests": [
+        {"name": "t", "type": "shell", "script": "true", "requires_sim": True}]})
+    assert [e.path for e in errors] == ["tests[0].requires_sim"]

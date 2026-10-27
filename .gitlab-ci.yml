@@ -1,8 +1,15 @@
-# CI for the standalone hector CLI repo: lint + unit tests, no Docker/Renode needed.
-# The suite is pure-logic (see tests/) and depends only on pytest + the CLI's single
-# runtime dependency, pyyaml — plus setuptools, which test_version needs to exercise
-# setup.py and which python:3.12-slim no longer ships.
-stages: [check]
+# CI for the standalone hector CLI repo.
+#
+# check:    lint + unit tests, no Docker/Renode needed. The suite is pure-logic (see
+#           tests/) and depends only on pytest + the CLI's single runtime dependency,
+#           pyyaml — plus setuptools, which test_version needs to exercise setup.py and
+#           which python:3.12-slim no longer ships.
+# examples: `hector test` on the examples against real Docker + Renode, through a
+#           Docker-in-Docker service. The project lives under /builds, which the runner
+#           shares with the service, so hector's 1:1 bind mounts resolve there; ports of
+#           --net=host containers are on the service's host (`docker`), which hector
+#           follows via DOCKER_HOST.
+stages: [check, examples]
 
 python:
   stage: check
@@ -13,3 +20,39 @@ python:
   script:
     - ruff check .
     - python -m pytest
+
+examples:
+  stage: examples
+  image: docker:27
+  services:
+    - name: docker:27-dind
+      alias: docker
+      command: ["--tls=false"]
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+    # Every example except torizon-verdin-imx8mp (a ~15 min Renode build, a 215 MB
+    # download and a 3 GB, ~4 min boot): run that one by hand or on a schedule. The
+    # slow ones here: multi-machine-uart-link (~2.5 min, builds a Verilator module),
+    # network-ping (~2 min), toradex-stm32 (~1 min); the rest take seconds.
+    EXAMPLES: >-
+      background-sim csharp-peripheral custom-renode-image docker-runner
+      external-firmware-resc inline-repl-resc multi-machine-uart-link network-ping
+      nucleo-f767zi nucleo-h753zi stm32f103-full toradex-stm32 yaml-defined-mcu
+      zedboard-net
+  before_script:
+    - apk add --no-cache python3 py3-pip bash git
+    - pip install --break-system-packages .
+  script:
+    - |
+      failed=""
+      for e in $EXAMPLES; do
+        echo "=== $e"
+        (cd "examples/$e" && hector test) || failed="$failed $e"
+      done
+      if [ -n "$failed" ]; then echo "Failed:$failed"; exit 1; fi
+  artifacts:
+    when: always
+    paths:
+      - examples/*/results/
+    expire_in: 1 week

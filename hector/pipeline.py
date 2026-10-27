@@ -33,7 +33,7 @@ from .hubs import HUBS
 from .modules import BuildContext, build_modules
 from .reporters import emit
 from .runners import RunnerContext, run_prepare_steps, run_tests
-from .validator import REMOVED_TOP_KEYS, print_issues, validate_config
+from .validator import OLD_SCHEMA_VERSIONS, REMOVED_TOP_KEYS, print_issues, validate_config
 
 
 # ---------------------------------------------------------------------------
@@ -106,16 +106,24 @@ def load_config_or_exit():
         print(f"[ERROR] '{config_path}' must be a YAML mapping (got "
               f"{type(config).__name__}).", file=sys.stderr)
         sys.exit(1)
+    # Errors from old schemas are fatal here, not just under `validate`: silently
+    # ignoring e.g. a firmware fetch or the Renode image would fail later, confusingly.
+    problem = None
+    if str(config.get("version")) in OLD_SCHEMA_VERSIONS:
+        problem = f"'version: {config['version']}' — {OLD_SCHEMA_VERSIONS[str(config['version'])]}"
     removed = [k for k in REMOVED_TOP_KEYS if k in config]
-    if removed:
-        # Not just a warning: skipping e.g. a firmware fetch would fail every later test.
-        print(f"[ERROR] '{config_path}': '{removed[0]}:' — {REMOVED_TOP_KEYS[removed[0]]}",
-              file=sys.stderr)
-        sys.exit(1)
-    try:
-        renode_image_field(config.get("renode"))
-    except ValueError as exc:
-        print(f"[ERROR] '{config_path}': {exc}", file=sys.stderr)
+    if not problem and removed:
+        problem = f"'{removed[0]}:' — {REMOVED_TOP_KEYS[removed[0]]}"
+    if not problem:
+        try:
+            renode_image_field(config.get("renode"))
+        except ValueError as exc:
+            problem = str(exc)
+    if not problem and any(isinstance(t, dict) and "requires_sim" in t
+                           for t in config.get("tests") or []):
+        problem = "'requires_sim' was renamed to 'requires-machine' — rename the key."
+    if problem:
+        print(f"[ERROR] '{config_path}': {problem}", file=sys.stderr)
         sys.exit(1)
     v = config.get("version")
     if v is not None and str(v) not in SUPPORTED_SCHEMA_VERSIONS:
@@ -664,12 +672,15 @@ def run_job(i, total_jobs, job_context, cfg):
             print("\n[PREPARE] skipped (--skip-prepare).")
         elif cfg.action is not action_export:
             prepare_blocks = interpolate(copy.deepcopy(cfg.config.get("prepare", [])), context)
-            prepare_results = run_prepare_steps(prepare_blocks, cfg.output_dir, live=cfg.live)
+            # Only `test` writes reports; `run` shows prepare output in the terminal.
+            prepare_results = run_prepare_steps(
+                prepare_blocks, cfg.output_dir if cfg.test_mode else None, live=cfg.live)
         if not all(r.passed for r in prepare_results):
             print("\n[PREPARE] a prepare step failed — skipping the simulation/tests.")
             result["test_results"] = prepare_results
             result["passed"] = False
-            emit(prepare_results, cfg.output_dir, cfg.reporter_names)
+            if cfg.test_mode:
+                emit(prepare_results, cfg.output_dir, cfg.reporter_names)
             return result
 
         # ---- PHASE 1: build modules ----
@@ -802,7 +813,7 @@ def run_job(i, total_jobs, job_context, cfg):
         # ---- PHASE 2: generate resc (if any machines); simulate / test ----
         # A resc is only produced when machines are defined. The action still runs
         # without one: `run`/`export` error (they need a machine), while `test` runs
-        # shell tests without `requires_sim: true` and skips the rest.
+        # shell tests without `requires-machine: true` and skips the rest.
         resc_filename = None
         if concrete_nodes:
             resc_root = os.path.join(ARTIFACTS_DIR, "resc")
@@ -824,7 +835,8 @@ def run_job(i, total_jobs, job_context, cfg):
         step_results = prepare_results + (result.get("test_results") or [])
         result["test_results"] = step_results
         if step_results:
-            emit(step_results, cfg.output_dir, cfg.reporter_names)
+            if cfg.test_mode:
+                emit(step_results, cfg.output_dir, cfg.reporter_names)
             result["passed"] = result["passed"] and all(r.passed for r in step_results)
 
         # ---- PHASE 3: sweep artifacts ----

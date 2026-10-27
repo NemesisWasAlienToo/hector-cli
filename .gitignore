@@ -6,7 +6,7 @@ results/
 dist/
 
 # Renode source / integration checkouts cloned on demand
-renode*
+/renode*
 
 # Python build & bytecode
 __pycache__/

@@ -1,0 +1,688 @@
+diff --git a/src/Emulator/Cores/Arm/ARM_GenericInterruptController.cs b/src/Emulator/Cores/Arm/ARM_GenericInterruptController.cs
+index bd3ce9918..d8eb55249 100644
+--- a/src/Emulator/Cores/Arm/ARM_GenericInterruptController.cs
++++ b/src/Emulator/Cores/Arm/ARM_GenericInterruptController.cs
+@@ -367,6 +367,26 @@ public void LockExecuteAndUpdate(Action action)
+                 {
+                     cpu.UpdateSignals();
+                 }
++                if(WakeRequest != null)
++                {
++                    foreach(var entry in cpuEntries)
++                    {
++                        if(entry.Value.IsSleeping && HasWakeupInterrupt(entry.Value))
++                        {
++                            WakeRequest(entry.Key);
++                        }
++                    }
++                }
++            }
++        }
++
++        // Whether the redistributor of the given CPU asserts its wake request, see `WakeRequest`.
++        public bool IsWakeRequestAsserted(IARMSingleSecurityStateCPU cpu)
++        {
++            lock(locker)
++            {
++                var entry = cpuEntries[cpu];
++                return entry.IsSleeping && HasWakeupInterrupt(entry);
+             }
+         }
+ 
+@@ -685,6 +705,12 @@ public bool AffinityRoutingEnabledNonSecure
+ 
+         public event Action<IARMSingleSecurityStateCPU> CPUAttached;
+ 
++        // Models the redistributor's wake_request output to the power controller: raised (under the GIC lock)
++        // for a CPU whose redistributor is asleep (GICR_WAKER.ProcessorSleep) while an enabled interrupt
++        // targeting it is pending. The CPU interface may be disabled at that point, so its group enables
++        // and priority mask are not taken into account.
++        public event Action<IARMSingleSecurityStateCPU> WakeRequest;
++
+         private uint GetProcessorNumber(ICPU cpu)
+         {
+             if(ArchitectureVersion == ARM_GenericInterruptControllerVersion.GICv1)
+@@ -992,6 +1018,35 @@ private IEnumerable<Interrupt> GetAllPendingCandidateInterrupts(CPUEntry cpu)
+                 .Where(filter);
+         }
+ 
++        private bool HasWakeupInterrupt(CPUEntry cpu)
++        {
++            var enabledGroups = groups.Keys.Where(type => groups[type].Enabled).ToArray();
++            return pendingInterrupts
++                .Where(irq => !irq.IsShared && irq.Owner == cpu)
++                .Concat(pendingInterrupts.OfType<SharedInterrupt>().Where(irq => IsSharedInterruptWakingCPU(irq, cpu)))
++                .Any(irq => irq.State.Pending && !irq.State.Active && irq.Config.Enabled && enabledGroups.Contains(irq.Config.GroupType));
++        }
++
++        // Regular routing skips sleeping CPUs; a wake request is raised for a sleeping CPU an SPI is routed to,
++        // or, for 1-of-N SPIs, for the lowest-numbered CPU if no CPU is awake to take it.
++        private bool IsSharedInterruptWakingCPU(SharedInterrupt irq, CPUEntry cpu)
++        {
++            if(cpuEntries.Count == 1)
++            {
++                return true;
++            }
++            if(!IsAffinityRoutingEnabled(cpu))
++            {
++                return irq.IsLegacyRoutingTargetingCPU(cpu);
++            }
++            if(irq.RoutingMode != InterruptRoutingMode.AnyTarget)
++            {
++                return irq.TargetAffinity.AllLevels == cpu.Affinity.AllLevels;
++            }
++            return cpuEntries.Values.All(entry => entry.IsSleeping)
++                && cpu == cpuEntries.Values.OrderBy(entry => entry.Affinity.AllLevels).First();
++        }
++
+         private IEnumerable<VirtualInterrupt> GetAllPendingCandidateVirtualInterrupts(CPUEntry cpu)
+         {
+             var enabledGroups = groups.Keys.Where(type => cpu.Groups.Virtual[type].Enabled).ToArray();
+diff --git a/src/Emulator/Cores/Arm/Timers/ARM_GenericTimer.cs b/src/Emulator/Cores/Arm/Timers/ARM_GenericTimer.cs
+index 2563179bc..c1b897740 100644
+--- a/src/Emulator/Cores/Arm/Timers/ARM_GenericTimer.cs
++++ b/src/Emulator/Cores/Arm/Timers/ARM_GenericTimer.cs
+@@ -374,6 +374,7 @@ public TimerUnit(IClockSource clockSource, IPeripheral parent, string name, GPIO
+                 this.parent = parent;
+                 IRQ = irq;
+ 
++                this.frequency = frequency;
+                 timer = new ComparingTimer(clockSource, frequency, parent, name, limit: ulong.MaxValue, compare: ulong.MaxValue, enabled: true, eventEnabled: true);
+                 timer.CompareReached += OnCompareReached;
+             }
+@@ -382,6 +383,7 @@ public void Reset()
+             {
+                 offset = 0;
+                 timer.Reset();
++                calibrated = false;
+ 
+                 InterruptMask = false;
+                 InterruptEnable = false;
+@@ -401,7 +403,24 @@ public void UpdateInterrupt()
+ 
+             public GPIO IRQ { get; }
+ 
+-            public ulong Value => timer.Value;
++            // The counter is free-running at a fixed frequency, so it is computed from the clock source's elapsed
++            // virtual time, calibrated against the underlying timer whenever that one is set. Reading `timer.Value`
++            // updates its clock entry, which is costly; software polling the counter (udelay, U-Boot's autoboot
++            // countdown) spent most of its time there.
++            public ulong Value
++            {
++                get
++                {
++                    if(!calibrated)
++                    {
++                        Calibrate();
++                    }
++                    var elapsedTicks = clockSource.CurrentValue.Ticks - calibrationTicks;
++                    return calibrationValue
++                        + elapsedTicks / TimeInterval.TicksPerSecond * frequency
++                        + elapsedTicks % TimeInterval.TicksPerSecond * frequency / TimeInterval.TicksPerSecond;
++                }
++            }
+ 
+             // The offset property is defined as the difference between value properties of a some parent timer and the timer itself.
+             // For example the Virtual timer has an offset over the Physical timer.
+@@ -415,6 +434,7 @@ public ulong Offset
+                             var offsetDiff = value - offset;
+                             timer.Value -= offsetDiff;
+                             offset += offsetDiff;
++                            calibrated = false;
+                             UpdateStatus();
+                         });
+                 }
+@@ -473,8 +493,23 @@ private void OnCompareReached()
+                 UpdateInterrupt();
+             }
+ 
++            private void Calibrate()
++            {
++                clockSource.ExecuteInLock(() =>
++                {
++                    calibrationValue = timer.Value;
++                    calibrationTicks = clockSource.CurrentValue.Ticks;
++                    calibrated = true;
++                });
++            }
++
++            private bool calibrated;
++            private ulong calibrationValue;
++            private ulong calibrationTicks;
+             private ulong offset;
+ 
++            private readonly ulong frequency;
++
+             private readonly IClockSource clockSource;
+             private readonly string name;
+             private readonly IPeripheral parent;
+diff --git a/src/Emulator/Peripherals/Peripherals/Miscellaneous/NXP_IMX8MP_SystemResetController.cs b/src/Emulator/Peripherals/Peripherals/Miscellaneous/NXP_IMX8MP_SystemResetController.cs
+index 668d6e832..ac89a3df1 100644
+--- a/src/Emulator/Peripherals/Peripherals/Miscellaneous/NXP_IMX8MP_SystemResetController.cs
++++ b/src/Emulator/Peripherals/Peripherals/Miscellaneous/NXP_IMX8MP_SystemResetController.cs
+@@ -87,6 +87,12 @@ public void OnGPIO(int number, bool value)
+             }
+         }
+ 
++        // Reset vector (RVBAR) of the given core, as programmed into GPR(2i+1)/GPR(2i+2)
++        public ulong GetCoreEntry(int coreIndex)
++        {
++            return (((ulong)gprHigh[coreIndex].Value << 22) | (ulong)gprLow[coreIndex].Value) << 2;
++        }
++
+         public long Size => 0x2000;
+ 
+         // Domain-control tail at bits [31:24] shared by every SRC register. Behaviour is not modeled.
+@@ -157,9 +163,9 @@ private void DefineControlRegisters()
+ 
+             RegisterWithDomainControlTags(Registers.A53RCR1.Define(this, 0x1)
+                 .WithFlag(0, FieldMode.Read, name: "A53_CORE0_ENABLE", valueProviderCallback: _ => true)
+-                .WithFlag(1, name: "A53_CORE1_ENABLE", writeCallback: (_, val) => SetCoreEnable(1, val))
+-                .WithFlag(2, name: "A53_CORE2_ENABLE", writeCallback: (_, val) => SetCoreEnable(2, val))
+-                .WithFlag(3, name: "A53_CORE3_ENABLE", writeCallback: (_, val) => SetCoreEnable(3, val))
++                .WithFlag(1, name: "A53_CORE1_ENABLE", writeCallback: (prev, val) => SetCoreEnable(1, prev, val))
++                .WithFlag(2, name: "A53_CORE2_ENABLE", writeCallback: (prev, val) => SetCoreEnable(2, prev, val))
++                .WithFlag(3, name: "A53_CORE3_ENABLE", writeCallback: (prev, val) => SetCoreEnable(3, prev, val))
+                 .WithTag("A53_RST_SLOW", 4, 3)
+                 .WithReservedBits(7, 17));
+ 
+@@ -343,14 +349,21 @@ private void DefineDdrRegisters()
+         private void ReleaseCoreOnWrite(int coreIndex)
+         {
+             var cpu = cpus[coreIndex];
+-            var rvbar = (((ulong)gprHigh[coreIndex].Value << 22) | (ulong)gprLow[coreIndex].Value) << 2;
++            var rvbar = GetCoreEntry(coreIndex);
+             cpu.PC = rvbar;
+             cpu.IsHalted = false;
+             this.DebugLog("Released core{0} from reset: GPR_H=0x{1:X} GPR_L=0x{2:X} RVBAR=0x{3:X}", coreIndex, gprHigh[coreIndex].Value, gprLow[coreIndex].Value, rvbar);
+         }
+ 
+-        private void SetCoreEnable(int coreIndex, bool val)
++        private void SetCoreEnable(int coreIndex, bool previous, bool val)
+         {
++            if(val && !previous)
++            {
++                // Enabling the core deasserts nCPUPORESET: it comes out of reset at RVBAR
++                // (NXP TF-A PSCI CPU_ON clears and then sets this bit to power a core up)
++                ReleaseCoreOnWrite(coreIndex);
++                return;
++            }
+             if(cpus[coreIndex] != null)
+             {
+                 cpus[coreIndex].IsHalted = !val;
+diff --git a/src/Emulator/Peripherals/Peripherals/SD/NXP_uSDHC.cs b/src/Emulator/Peripherals/Peripherals/SD/NXP_uSDHC.cs
+index 43578cdb8..ec5b4125a 100644
+--- a/src/Emulator/Peripherals/Peripherals/SD/NXP_uSDHC.cs
++++ b/src/Emulator/Peripherals/Peripherals/SD/NXP_uSDHC.cs
+@@ -20,8 +20,12 @@ public class NXP_uSDHC : NullRegistrationPointPeripheralContainer<SDCard>,
+         IDoubleWordPeripheral, IKnownSize,
+         IProvidesRegisterCollection<DoubleWordRegisterCollection>
+     {
+-        public NXP_uSDHC(IMachine machine) : base(machine)
++        // `dmaSupported` advertises SDMA (HOST_CTRL_CAP.DMASUP). The controller then copies whole transfers
++        // to/from DS_ADDR at once; drivers otherwise fall back to PIO, which e.g. Linux sdhci-esdhc-imx does with
++        // a 100 us delay per block (SDHCI_QUIRK_PIO_NEEDS_DELAY).
++        public NXP_uSDHC(IMachine machine, bool dmaSupported = false) : base(machine)
+         {
++            this.dmaSupported = dmaSupported;
+             IRQ = new GPIO();
+             sysbus = machine.GetSystemBus(this);
+             RegistersCollection = new DoubleWordRegisterCollection(this);
+@@ -165,7 +169,7 @@ private void InitializeRegisters()
+             Registers.HostCtrlCap.Define(this)
+                 .WithReservedBits(0, 21)
+                 .WithFlag(21, FieldMode.Read, valueProviderCallback: _ => true, name: "HSSUP")
+-                .WithFlag(22, FieldMode.Read, valueProviderCallback: _ => false, name: "DMASUP")
++                .WithFlag(22, FieldMode.Read, valueProviderCallback: _ => dmaSupported, name: "DMASUP")
+                 .WithFlag(23, FieldMode.Read, valueProviderCallback: _ => false, name: "SRSUP")
+                 .WithFlag(24, FieldMode.Read, valueProviderCallback: _ => true, name: "VS33")
+                 .WithFlag(25, FieldMode.Read, valueProviderCallback: _ => true, name: "VS30")
+@@ -398,6 +402,7 @@ private void UpdateInterrupts()
+         private IValueRegisterField commandArgument;
+         private IFlagRegisterField commandCompleteStatus;
+         private IFlagRegisterField transferCompleteStatus;
++        private readonly bool dmaSupported;
+         private IFlagRegisterField dmaInterruptStatus;
+         private IFlagRegisterField commandTimeoutStatus;
+ 
+diff --git a/src/UI/ConsoleIOSource.cs b/src/UI/ConsoleIOSource.cs
+index 12d40aa40..a330c5fa5 100644
+--- a/src/UI/ConsoleIOSource.cs
++++ b/src/UI/ConsoleIOSource.cs
+@@ -119,7 +119,14 @@ private void RedirectedHandling()
+             // For cases in which input has been redirected from a file
+             while(true)
+             {
+-                ByteRead?.Invoke(Console.Read());
++                var value = Console.Read();
++                ByteRead?.Invoke(value);
++                // At EOF Console.Read returns -1 immediately on every call; report it once and stop,
++                // otherwise every -1 is queued by the terminal and memory grows without bound.
++                if(value == -1)
++                {
++                    break;
++                }
+             }
+         }
+ 
+diff --git a/src/Emulator/Peripherals/Peripherals/Miscellaneous/NXP_IMX8MP_DDRC.cs b/src/Emulator/Peripherals/Peripherals/Miscellaneous/NXP_IMX8MP_DDRC.cs
+new file mode 100644
+index 000000000..8ea4a0ad5
+--- /dev/null
++++ b/src/Emulator/Peripherals/Peripherals/Miscellaneous/NXP_IMX8MP_DDRC.cs
+@@ -0,0 +1,86 @@
++//
++// Copyright (c) 2010-2026 Antmicro
++//
++// This file is licensed under the MIT License.
++// Full license text is available in 'licenses/MIT.txt'.
++//
++using System.Collections.Generic;
++
++using Antmicro.Renode.Core;
++using Antmicro.Renode.Peripherals.Bus;
++
++namespace Antmicro.Renode.Peripherals.Miscellaneous
++{
++    // i.MX 8M DDR controller (Synopsys uMCTL2) register file with the status handshakes TF-A's DDR DVFS
++    // (ddr4_swffc/sw_pstate, used for Linux busfreq requests) waits for. There is no DRAM timing behind it:
++    // registers store what is written, and status registers follow their control bits immediately.
++    public class NXP_IMX8MP_DDRC : IDoubleWordPeripheral, IKnownSize
++    {
++        public NXP_IMX8MP_DDRC(IMachine machine)
++        {
++            Reset();
++        }
++
++        public void Reset()
++        {
++            registers.Clear();
++        }
++
++        public uint ReadDoubleWord(long offset)
++        {
++            switch((Registers)offset)
++            {
++            case Registers.Status:
++                // operating_mode: self-refresh (SW-initiated, 0x23) while PWRCTL.selfref_sw is set, normal otherwise
++                return (Get(Registers.PowerControl) & SelfRefreshSoftware) != 0 ? StatusSelfRefresh : StatusNormal;
++            case Registers.ModeRegisterStatus:
++                return 0; // mr_wr_busy never set
++            case Registers.DfiStatus:
++                // dfi_init_complete drops while DFIMISC.dfi_init_start is asserted
++                return (Get(Registers.DfiMisc) & DfiInitStart) != 0 ? 0u : 1u;
++            case Registers.DebugCam:
++                return DebugCamEmpty;
++            case Registers.SoftwareStatus:
++                return Get(Registers.SoftwareControl) & SoftwareDone;
++            case Registers.PortStatus:
++                return 0; // no outstanding port transactions
++            default:
++                return Get((Registers)offset);
++            }
++        }
++
++        public void WriteDoubleWord(long offset, uint value)
++        {
++            registers[offset] = value;
++        }
++
++        public long Size => 0x10000;
++
++        private uint Get(Registers register)
++        {
++            return registers.TryGetValue((long)register, out var value) ? value : 0;
++        }
++
++        private readonly Dictionary<long, uint> registers = new Dictionary<long, uint>();
++
++        private const uint SelfRefreshSoftware = 1u << 5;
++        private const uint StatusSelfRefresh = 0x23;
++        private const uint StatusNormal = 0x1;
++        private const uint DfiInitStart = 1u << 5;
++        private const uint DebugCamEmpty = 0x36000000; // wr/rd queues and data pipelines empty
++        private const uint SoftwareDone = 0x1;
++
++        private enum Registers : long
++        {
++            Status = 0x04,
++            ModeRegisterStatus = 0x18,
++            PowerControl = 0x30,
++            DfiMisc = 0x1B0,
++            DfiStatus = 0x1BC,
++            DebugCam = 0x308,
++            SoftwareControl = 0x320,
++            SoftwareStatus = 0x324,
++            PortStatus = 0x3FC,
++        }
++    }
++}
+diff --git a/src/Emulator/Peripherals/Peripherals/Miscellaneous/NXP_IMX8MP_GPC.cs b/src/Emulator/Peripherals/Peripherals/Miscellaneous/NXP_IMX8MP_GPC.cs
+new file mode 100644
+index 000000000..f6f7cf4a0
+--- /dev/null
++++ b/src/Emulator/Peripherals/Peripherals/Miscellaneous/NXP_IMX8MP_GPC.cs
+@@ -0,0 +1,200 @@
++//
++// Copyright (c) 2010-2026 Antmicro
++//
++// This file is licensed under the MIT License.
++// Full license text is available in 'licenses/MIT.txt'.
++//
++using Antmicro.Renode.Core;
++using Antmicro.Renode.Exceptions;
++using Antmicro.Renode.Logging;
++using Antmicro.Renode.Peripherals.Bus;
++using Antmicro.Renode.Peripherals.CPU;
++using Antmicro.Renode.Peripherals.IRQControllers;
++
++namespace Antmicro.Renode.Peripherals.Miscellaneous
++{
++    // i.MX 8M Plus General Power Controller: models A53 core power-down on WFI and wake-up on interrupt,
++    // which TF-A uses for PSCI CPU_SUSPEND (Linux cpuidle "cpu-pd-wait").
++    //
++    // TF-A arms a core with LPCR_A53_AD.COREx_WFI_PDN/COREx_IRQ_WUP and COREx_PGC_PCR, disables the core's
++    // GIC CPU interface (GICR_WAKER.ProcessorSleep) and parks it in a `wfi` loop. On hardware the GPC then
++    // powers the core down, and when the redistributor raises its wake request it powers the core up,
++    // which restarts it from the reset vector programmed in the SRC (TF-A's warm boot entry).
++    //
++    // All other registers keep the behaviour of the former `flipflop.py` stub: every access toggles a
++    // shared state and reads return 0 or 0xFFFFFFFF, so software polling status/trigger bits terminates.
++    public class NXP_IMX8MP_GPC : IDoubleWordPeripheral, IKnownSize
++    {
++        public NXP_IMX8MP_GPC(IMachine machine, ARM_GenericInterruptController gic, NXP_IMX8MP_SystemResetController src, TranslationCPU[] cpus)
++        {
++            if(cpus.Length != NumCores)
++            {
++                throw new ConstructionException($"Expected exactly {NumCores} CPUs, got {cpus.Length}");
++            }
++            this.machine = machine;
++            this.gic = gic;
++            this.src = src;
++            this.cpus = cpus;
++            pgcPcr = new uint[NumCores];
++            poweredDown = new bool[NumCores];
++
++            for(var i = 0; i < NumCores; i++)
++            {
++                var core = i;
++                cpus[i].AddHookAtWfiStateChange(isInWfi => OnWfiStateChange(core, isInWfi));
++            }
++            gic.WakeRequest += OnWakeRequest;
++            Reset();
++        }
++
++        public void Reset()
++        {
++            lock(locker)
++            {
++                flipFlop = false;
++                lpcrA53Ad = 0;
++                for(var i = 0; i < NumCores; i++)
++                {
++                    pgcPcr[i] = 0;
++                    poweredDown[i] = false;
++                }
++            }
++        }
++
++        public uint ReadDoubleWord(long offset)
++        {
++            lock(locker)
++            {
++                if(offset == LpcrA53AdOffset)
++                {
++                    return lpcrA53Ad;
++                }
++                if(TryGetCorePgcPcr(offset, out var core))
++                {
++                    return pgcPcr[core];
++                }
++                if(offset == CpuPgcUpTrgOffset)
++                {
++                    // Core power-up completes immediately
++                    return 0;
++                }
++                return ToggleFlipFlop();
++            }
++        }
++
++        public void WriteDoubleWord(long offset, uint value)
++        {
++            lock(locker)
++            {
++                if(offset == LpcrA53AdOffset)
++                {
++                    lpcrA53Ad = value;
++                    return;
++                }
++                if(TryGetCorePgcPcr(offset, out var core))
++                {
++                    pgcPcr[core] = value;
++                    return;
++                }
++                if(offset == CpuPgcUpTrgOffset)
++                {
++                    return;
++                }
++                ToggleFlipFlop();
++            }
++        }
++
++        public long Size => 0x10000;
++
++        private static uint WfiPowerDownMask(int core) => 1u << (core < 2 ? core * 2 : (core - 2) * 2 + 16);
++
++        private static uint IrqWakeUpMask(int core) => core < 2 ? 1u << (core * 2 + 8) : 1u << (core * 2 + 20);
++
++        private static bool TryGetCorePgcPcr(long offset, out int core)
++        {
++            core = (int)((offset - CorePgcPcrOffset) / CorePgcStride);
++            return offset >= CorePgcPcrOffset && core < NumCores && offset == CorePgcPcrOffset + core * CorePgcStride;
++        }
++
++        private uint ToggleFlipFlop()
++        {
++            flipFlop = !flipFlop;
++            return flipFlop ? 0xFFFFFFFF : 0;
++        }
++
++        private bool IsArmedForPowerDown(int core)
++        {
++            return (lpcrA53Ad & WfiPowerDownMask(core)) != 0 && (pgcPcr[core] & PgcPcrPowerControlEnable) != 0;
++        }
++
++        private void OnWfiStateChange(int core, bool isInWfi)
++        {
++            if(!isInWfi)
++            {
++                return;
++            }
++            lock(locker)
++            {
++                if(poweredDown[core] || !IsArmedForPowerDown(core))
++                {
++                    return;
++                }
++                poweredDown[core] = true;
++                this.NoisyLog("Core{0} powered down on WFI", core);
++            }
++            // The wake request may already be asserted, it is only reported on GIC state changes
++            if(gic.IsWakeRequestAsserted((IARMSingleSecurityStateCPU)cpus[core]))
++            {
++                OnWakeRequest((IARMSingleSecurityStateCPU)cpus[core]);
++            }
++        }
++
++        private void OnWakeRequest(IARMSingleSecurityStateCPU cpu)
++        {
++            var core = System.Array.IndexOf(cpus, cpu as TranslationCPU);
++            if(core < 0)
++            {
++                return;
++            }
++            lock(locker)
++            {
++                if(!poweredDown[core])
++                {
++                    return;
++                }
++                if((lpcrA53Ad & IrqWakeUpMask(core)) == 0)
++                {
++                    this.NoisyLog("Wake request for core{0} ignored: IRQ wake-up disabled (LPCR_A53_AD 0x{1:X})", core, lpcrA53Ad);
++                    return;
++                }
++                poweredDown[core] = false;
++            }
++            // Power the core back up: it restarts from its SRC reset vector (still at EL3, where it was parked)
++            machine.LocalTimeSource.ExecuteInNearestSyncedState(_ =>
++            {
++                var entry = src.GetCoreEntry(core);
++                this.NoisyLog("Core{0} woken up, restarting at 0x{1:X}", core, entry);
++                cpus[core].PC = entry;
++                cpus[core].RequestWakeUpFromWfi();
++            });
++        }
++
++        private bool flipFlop;
++        private uint lpcrA53Ad;
++
++        private readonly uint[] pgcPcr;
++        private readonly bool[] poweredDown;
++        private readonly IMachine machine;
++        private readonly ARM_GenericInterruptController gic;
++        private readonly NXP_IMX8MP_SystemResetController src;
++        private readonly TranslationCPU[] cpus;
++        private readonly object locker = new object();
++
++        private const int NumCores = 4;
++        private const long LpcrA53AdOffset = 0x4;
++        private const long CpuPgcUpTrgOffset = 0xD0;
++        private const long CorePgcPcrOffset = 0x800;
++        private const long CorePgcStride = 0x40;
++        private const uint PgcPcrPowerControlEnable = 0x1;
++    }
++}
+diff --git a/src/Emulator/Peripherals/Peripherals/Timers/NXP_IMX_SystemCounter.cs b/src/Emulator/Peripherals/Peripherals/Timers/NXP_IMX_SystemCounter.cs
+new file mode 100644
+index 000000000..0dd751b6b
+--- /dev/null
++++ b/src/Emulator/Peripherals/Peripherals/Timers/NXP_IMX_SystemCounter.cs
+@@ -0,0 +1,117 @@
++//
++// Copyright (c) 2010-2026 Antmicro
++//
++// This file is licensed under the MIT License.
++// Full license text is available in 'licenses/MIT.txt'.
++//
++using Antmicro.Renode.Core;
++using Antmicro.Renode.Core.Structure.Registers;
++using Antmicro.Renode.Logging;
++using Antmicro.Renode.Peripherals.Bus;
++using Antmicro.Renode.Time;
++
++namespace Antmicro.Renode.Peripherals.Timers
++{
++    // i.MX 8M System Counter ("nxp,sysctr-timer"): the read frame (CNTCV) and compare frame 0
++    // (CMPCV0/CMPCR0), which Linux uses as the tick broadcast clockevent when the cores' local
++    // timers stop in deep cpuidle states. The control frame is not modeled.
++    public class NXP_IMX_SystemCounter : BasicDoubleWordPeripheral, IKnownSize
++    {
++        public NXP_IMX_SystemCounter(IMachine machine, ulong frequency = 8000000) : base(machine)
++        {
++            IRQ = new GPIO();
++            counter = new ComparingTimer(machine.ClockSource, frequency, this, "counter", enabled: true, workMode: WorkMode.Periodic);
++            counter.CompareReached += () =>
++            {
++                this.NoisyLog("Compare value 0x{0:X} reached", counter.Compare);
++                status = true;
++                UpdateInterrupt();
++            };
++            DefineRegisters();
++        }
++
++        public override void Reset()
++        {
++            base.Reset();
++            counter.Reset();
++            counter.Enabled = true;
++            status = false;
++            UpdateInterrupt();
++        }
++
++        public long Size => 0x20000;
++
++        public GPIO IRQ { get; }
++
++        private void DefineRegisters()
++        {
++            // Read frame
++            Registers.CounterLow.Define(this)
++                .WithValueField(0, 32, FieldMode.Read, name: "CNTCV_LO", valueProviderCallback: _ => (uint)counter.Value);
++            Registers.CounterHigh.Define(this)
++                .WithValueField(0, 24, FieldMode.Read, name: "CNTCV_HI", valueProviderCallback: _ => (uint)(counter.Value >> 32))
++                .WithReservedBits(24, 8);
++
++            // Compare frame 0
++            Registers.CompareLow.Define(this)
++                .WithValueField(0, 32, out compareLow, name: "CMPCV_LO", writeCallback: (_, __) => UpdateCompare());
++            Registers.CompareHigh.Define(this)
++                .WithValueField(0, 24, out compareHigh, name: "CMPCV_HI", writeCallback: (_, __) => UpdateCompare())
++                .WithReservedBits(24, 8);
++            Registers.CompareControl.Define(this)
++                .WithFlag(0, out enable, name: "EN", writeCallback: (_, val) =>
++                {
++                    // Clearing EN clears ISTAT (this is how Linux acknowledges the interrupt)
++                    if(!val)
++                    {
++                        status = false;
++                    }
++                    UpdateCompare();
++                })
++                .WithFlag(1, out interruptMask, name: "IMASK", writeCallback: (_, __) => UpdateInterrupt())
++                .WithFlag(2, FieldMode.Read, name: "ISTAT", valueProviderCallback: _ => status)
++                .WithReservedBits(3, 29);
++        }
++
++        private void UpdateCompare()
++        {
++            var compare = (compareHigh.Value << 32) | compareLow.Value;
++            counter.EventEnabled = enable.Value;
++            counter.Compare = compare;
++            this.NoisyLog("Compare set to 0x{0:X} (counter 0x{1:X}, enabled {2})", compare, counter.Value, enable.Value);
++            // ISTAT is set whenever the counter is at or past the compare value
++            if(enable.Value && counter.Value >= compare)
++            {
++                status = true;
++            }
++            UpdateInterrupt();
++        }
++
++        private void UpdateInterrupt()
++        {
++            var irq = enable.Value && status && !interruptMask.Value;
++            if(irq != IRQ.IsSet)
++            {
++                this.NoisyLog("IRQ {0}", irq ? "set" : "cleared");
++            }
++            IRQ.Set(irq);
++        }
++
++        private bool status;
++        private IValueRegisterField compareLow;
++        private IValueRegisterField compareHigh;
++        private IFlagRegisterField enable;
++        private IFlagRegisterField interruptMask;
++
++        private readonly ComparingTimer counter;
++
++        private enum Registers
++        {
++            CounterLow = 0x8,
++            CounterHigh = 0xC,
++            CompareLow = 0x10020,
++            CompareHigh = 0x10024,
++            CompareControl = 0x1002C,
++        }
++    }
++}

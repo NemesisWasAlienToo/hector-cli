@@ -1,12 +1,12 @@
 # Shell test against a background emulation
 
-A `shell` test with `requires_sim: true` runs while the emulation is up. Hector starts
+A `shell` test with `requires-machine: true` runs while the emulation is up. Hector starts
 Renode headless in the background, loads the generated resc, runs the test's steps,
 then stops Renode.
 
 ```
 background-sim/
-├── .hector.yaml        # one machine + one requires_sim: true shell test
+├── .hector.yaml        # one machine + one requires-machine: true shell test
 └── checks/monitor.py   # tiny Renode monitor client (stdlib only)
 ```
 

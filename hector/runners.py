@@ -258,7 +258,7 @@ def _run_shell_test(test, steps, ctx, test_index):
     (or on the host under --no-docker). One StepResult per test, one report.html —
     mirrors the robot layout (a multi-step test is a single row named after the test).
 
-    With `requires_sim: true` the emulation runs headless in the background for the
+    With `requires-machine: true` the emulation runs headless in the background for the
     whole test (see BackgroundRenode): the steps reach it through the host network —
     its monitor on $HECTOR_MONITOR_PORT, plus any tcp:/pty mappings — and its log is
     saved as renode.log next to the report.
@@ -329,12 +329,12 @@ _RENAMED_TEST_TYPES = {"bash": "shell", "docker": "shell"}
 
 def _needs_sim(test):
     """Whether a test requires the Renode simulation (the generated resc). Robot tests
-    always do (renode-test runs it); a shell test only with `requires_sim: true`, which
+    always do (renode-test runs it); a shell test only with `requires-machine: true`, which
     runs the emulation in the background for it."""
     rtype = _RENAMED_TEST_TYPES.get(test.get("type", "robot"), test.get("type", "robot"))
     if rtype == "robot":
         return True
-    return bool(test.get("requires_sim", False))
+    return bool(test.get("requires-machine", False))
 
 
 def run_tests(tests, ctx, fail_fast=False):
@@ -354,7 +354,7 @@ def run_tests(tests, ctx, fail_fast=False):
         if _needs_sim(test) and not ctx.resc_host_path:
             name = test.get("name", f"test_{i}")
             print(f"\n[TEST] {name}\n  [SKIP] needs a simulation but no machine is "
-                  "defined (robot tests and 'requires_sim: true' need one).")
+                  "defined (robot tests and 'requires-machine: true' need one).")
             results.append(StepResult(
                 name=name, type=rtype, passed=False, duration=0.0,
                 stderr="requires a simulation but no machine/resc is available"))
@@ -379,7 +379,7 @@ def run_prepare_steps(blocks, results_dir, live=False):
     (that's how a step reaches `docker build`). The emulation never runs here. Returns
     one StepResult per block (type "prepare"), reported like tests; stops at the first
     failing block, since everything after depends on its outputs (the caller then
-    skips the sim/tests)."""
+    skips the sim/tests). results_dir=None writes no report.html (`hector run`)."""
     if not blocks:
         return []
     print("\n[PREPARE] preparing inputs ...")
@@ -398,13 +398,16 @@ def run_prepare_steps(blocks, results_dir, live=False):
             docker_flags=_step_docker_flags(block, name) if image else [])
         all_passed = all(r["passed"] for r in step_records)
         total_duration = sum(r["duration"] for r in step_records)
-        slug = re.sub(r"[^\w-]", "_", name)[:40]
-        html_path = _write_shell_html(os.path.join(results_dir, f"prepare_{b_idx}_{slug}"),
-                                      name, step_records, all_passed, total_duration)
+        artifacts = {}
+        if results_dir:
+            slug = re.sub(r"[^\w-]", "_", name)[:40]
+            artifacts["report_html"] = _write_shell_html(
+                os.path.join(results_dir, f"prepare_{b_idx}_{slug}"),
+                name, step_records, all_passed, total_duration)
         results.append(StepResult(
             name=name, type="prepare", passed=all_passed, duration=total_duration,
             commands=all_commands, stdout="\n\n".join(combined_stdout), stderr="",
-            artifacts={"report_html": html_path}))
+            artifacts=artifacts))
         if not all_passed:
             print(f"[PREPARE] '{name}' failed — skipping the rest.")
             break

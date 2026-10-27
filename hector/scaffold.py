@@ -5,7 +5,7 @@ import os
 import sys
 
 _TEMPLATE = """\
-version: "0.1"
+version: "0.2"
 renode:
   image: "{renode_version}"
 

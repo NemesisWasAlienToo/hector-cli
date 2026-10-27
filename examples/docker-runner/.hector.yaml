@@ -1,4 +1,4 @@
-version: "0.1"
+version: "0.2"
 renode:
   image: "1.16.1"
 
@@ -7,7 +7,7 @@ renode:
 # containers with the project bind-mounted at the same path, so files flow between
 # steps for free — no copying, no plumbing.
 #
-# `shell` tests don't need Renode unless they set `requires_sim: true`, so this config
+# `shell` tests don't need Renode unless they set `requires-machine: true`, so this config
 # needs no `machines:`.
 
 prepare:

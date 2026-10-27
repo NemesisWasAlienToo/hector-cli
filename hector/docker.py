@@ -157,7 +157,7 @@ def run_in_container(script, image, live=False, env=None, docker_flags=()):
     if core.NO_DOCKER or not image:
         cmd = ["bash", "-c", f"set -ex\n{script}"]
         cwd = core.execution_dir()
-        proc_env = {**os.environ, **env} if env else None
+        proc_env = {**os.environ, **{k: str(v) for k, v in env.items()}} if env else None
     else:
         env_flags = [f for k, v in (env or {}).items() for f in ("-e", f"{k}={v}")]
         cmd = ["docker", "run", "--rm", *_HOST_NETWORK, *_workspace_mount(),
@@ -206,7 +206,7 @@ def run_renode(resc_filename, image, extra_args=None, output_dir="results", runt
 
 
 class BackgroundRenode:
-    """A headless Renode running alongside a `shell` test (`requires_sim: true`).
+    """A headless Renode running alongside a `shell` test (`requires-machine: true`).
 
     Renode is started with its monitor on a TCP port (`-P`, reachable from the host and
     every container through the host network), then the resc is `include`d through that
@@ -253,7 +253,7 @@ class BackgroundRenode:
         deadline = time.monotonic() + self.timeout
         while True:
             try:
-                self._sock = socket.create_connection(("127.0.0.1", self.port), timeout=1)
+                self._sock = socket.create_connection((_monitor_host(), self.port), timeout=1)
                 break
             except OSError:
                 if time.monotonic() > deadline:
@@ -307,6 +307,16 @@ class BackgroundRenode:
             subprocess.run(["docker", "logs", self.name], stdout=log, stderr=subprocess.STDOUT)
         subprocess.run(["docker", "rm", "-f", self.name],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def _monitor_host():
+    """Where a --net=host container's ports are reachable from hector: this machine, or
+    the Docker daemon's host when DOCKER_HOST points elsewhere (e.g. a CI's DinD
+    service). Steps inside containers keep using localhost: they share that network."""
+    host = os.environ.get("DOCKER_HOST", "")
+    if core.NO_DOCKER or not host.startswith("tcp://"):
+        return "127.0.0.1"
+    return host[len("tcp://"):].rsplit(":", 1)[0].strip("[]") or "127.0.0.1"
 
 
 def _free_port():

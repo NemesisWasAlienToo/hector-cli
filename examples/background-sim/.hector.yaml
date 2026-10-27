@@ -1,8 +1,8 @@
-version: "0.1"
+version: "0.2"
 renode:
   image: "1.16.1"
 
-# A `shell` test with `requires_sim: true` gets the emulation running in the
+# A `shell` test with `requires-machine: true` gets the emulation running in the
 # background for the whole test. Its steps reach it over the host network: Renode's
 # monitor is on $HECTOR_MONITOR_PORT (and tcp: mappings work the same way).
 
@@ -22,7 +22,7 @@ machines:
 tests:
   - name: Query the running emulation
     type: shell
-    requires_sim: true
+    requires-machine: true
     image: python:3.12-slim
     steps:
       - name: firmware symbols are loaded

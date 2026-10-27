@@ -1,4 +1,4 @@
-version: "0.1"
+version: "0.2"
 
 # The Renode image is built by a prepare step, then used for everything after it. The
 # version in the tag also tells hector which Renode source matches, if it ever needs it.

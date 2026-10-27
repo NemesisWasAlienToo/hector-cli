@@ -2,7 +2,7 @@
 
     python3 checks/monitor.py 'mach set "mcu"' 'sysbus GetSymbolAddress "main"'
 
-The port comes from $HECTOR_MONITOR_PORT, which hector sets for `requires_sim: true`
+The port comes from $HECTOR_MONITOR_PORT, which hector sets for `requires-machine: true`
 tests. Exits non-zero if a command reports an error.
 """
 

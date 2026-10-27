@@ -1,0 +1,251 @@
+diff --git a/platforms/cpus/nxp-mimx8ml.repl b/platforms/cpus/nxp-mimx8ml.repl
+index 18718db..17d0f1b 100644
+--- a/platforms/cpus/nxp-mimx8ml.repl
++++ b/platforms/cpus/nxp-mimx8ml.repl
+@@ -88,6 +88,18 @@ memory_ddr: Memory.MappedMemory @ sysbus 0x40000000
+ ocram: Memory.MappedMemory @ sysbus 0x900000
+     size: 0x90000
+ 
++// DDR controller (uMCTL2) registers, for TF-A's DDR DVFS service
++ddrc: Miscellaneous.NXP_IMX8MP_DDRC @ sysbus 0x3d400000
++
++// 36 KiB on-chip RAM; SPL leaves the DDR timing info (struct dram_timing_info) here for TF-A's DDR DVFS
++// service (SAVED_DRAM_TIMING_BASE). Without a setpoint TF-A doesn't install its SGI 8 (FIQ) handler, yet still
++// raises SGI 8 when Linux' busfreq driver requests a DVFS, and Linux panics on the FIQ ("FIQ taken without a
++// root FIQ handler"). Provide the boot setpoint like SPL: fsp_table[0] (offset 76) = 4000 MT/s (LPDDR4-4000).
++ocram_s: Memory.MappedMemory @ sysbus 0x180000
++    size: 0x9000
++    init:
++        WriteDoubleWord 0x4C 4000
++
+ gpt1: Timers.IMX_GPTimer @ sysbus 0x302d0000
+     frequency: 32000
+     IRQ->gic@55
+@@ -207,10 +219,15 @@ i2c5: I2C.NXP_IMX_I2C @ sysbus 0x30AD0000
+ i2c6: I2C.NXP_IMX_I2C @ sysbus 0x30AE0000
+     IRQ -> gic@77
+ 
+-apis1_gpc: Python.PythonPeripheral @ sysbus 0x303a0000
+-    size: 0x10000
+-    initable: true
+-    filename: "scripts/pydev/flipflop.py"
++apis1_gpc: Miscellaneous.NXP_IMX8MP_GPC @ sysbus 0x303a0000
++    gic: gic
++    src: src
++    cpus: [cpu0, cpu1, cpu2, cpu3]
++
++// System counter read + compare frames (Linux "nxp,sysctr-timer" broadcast clockevent)
++sysctr: Timers.NXP_IMX_SystemCounter @ sysbus 0x306a0000
++    frequency: 8000000
++    IRQ -> gic@47
+ 
+ ecspi1: SPI.NXP_ECSPI @ sysbus 0x30820000
+     ->gic@31
+@@ -224,7 +241,6 @@ ecspi3: SPI.NXP_ECSPI @ sysbus 0x30840000
+ sysbus:
+     init add:
+         Tag <0x00100000 0x00008000> "CAAM"
+-        Tag <0x00180000 0x00009000> "OCRAM_S"
+         Tag <0x007E0000 0x00020000> "TCML" 0x1000
+         Tag <0x08000000 0x00800000> "QSPI"
+         Tag <0x18000000 0x08000000> "PCIe-1"
+@@ -273,6 +289,31 @@ sysbus:
+         Tag <0x30360000 0x10000> "ANA_PLL" 0xFFFFFFFF
+         Tag <0x30360084 0x4> "ARM_PLL_GNRL_CTL" 0x80000A00 silent=true // PLL locked, enabled, 24M ref
+         Tag <0x30360088 0x4> "ARM_PLL_DIV_CTL" 0x000C8021 silent=true  // PLL = 1200 MHz
++        // Remaining PLLs: locked (31), CLKE (13), output gate (11), RST_B (9), 24M ref, not bypassed,
++        // with the dividers used on hardware. Needed by DM clock drivers (upstream U-Boot, Linux), which
++        // derive every clock rate from these registers.
++        Tag <0x30360000 0x4> "AUDIO_PLL1_GEN_CTRL" 0x80002A00 silent=true
++        Tag <0x30360004 0x4> "AUDIO_PLL1_FDIV_CTL0" 0x00106023 silent=true // 393.216 MHz
++        Tag <0x30360008 0x4> "AUDIO_PLL1_FDIV_CTL1" 0x000024DD silent=true
++        Tag <0x30360014 0x4> "AUDIO_PLL2_GEN_CTRL" 0x80002A00 silent=true
++        Tag <0x30360018 0x4> "AUDIO_PLL2_FDIV_CTL0" 0x00169033 silent=true // 361.2672 MHz
++        Tag <0x3036001C 0x4> "AUDIO_PLL2_FDIV_CTL1" 0x00004467 silent=true
++        Tag <0x30360028 0x4> "VIDEO_PLL1_GEN_CTRL" 0x80002A00 silent=true
++        Tag <0x3036002C 0x4> "VIDEO_PLL1_FDIV_CTL0" 0x000C6022 silent=true // 594 MHz
++        Tag <0x30360030 0x4> "VIDEO_PLL1_FDIV_CTL1" 0x00000000 silent=true
++        Tag <0x30360050 0x4> "DRAM_PLL_GEN_CTRL" 0x80002A00 silent=true
++        Tag <0x30360054 0x4> "DRAM_PLL_FDIV_CTL0" 0x000FA031 silent=true  // 1000 MHz
++        Tag <0x30360058 0x4> "DRAM_PLL_FDIV_CTL1" 0x00000000 silent=true
++        Tag <0x30360064 0x4> "GPU_PLL_GEN_CTRL" 0x80002A00 silent=true
++        Tag <0x30360068 0x4> "GPU_PLL_FDIV_CTL0" 0x000FA031 silent=true   // 1000 MHz
++        Tag <0x30360074 0x4> "VPU_PLL_GEN_CTRL" 0x80002A00 silent=true
++        Tag <0x30360078 0x4> "VPU_PLL_FDIV_CTL0" 0x00190032 silent=true   // 800 MHz
++        Tag <0x30360094 0x4> "SYS_PLL1_GEN_CTRL" 0x80002A00 silent=true
++        Tag <0x30360098 0x4> "SYS_PLL1_FDIV_CTL0" 0x00190032 silent=true  // 800 MHz
++        Tag <0x30360104 0x4> "SYS_PLL2_GEN_CTRL" 0x80002A00 silent=true
++        Tag <0x30360108 0x4> "SYS_PLL2_FDIV_CTL0" 0x000FA031 silent=true  // 1000 MHz
++        Tag <0x30360114 0x4> "SYS_PLL3_GEN_CTRL" 0x80002A00 silent=true
++        Tag <0x30360118 0x4> "SYS_PLL3_FDIV_CTL0" 0x0012C032 silent=true  // 600 MHz
+         Tag <0x30360800 0x4> "DIGPROG" 0x00824311 silent=true          // SoC ID = i.MX8MP rev 1.1
+         Tag <0x30370000 0x10000> "SNVS_HP"
+         Tag <0x30380000 0x10000> "CCM" silent=true
+@@ -286,8 +327,6 @@ sysbus:
+         Tag <0x30670000 0x10000> "PWM2"
+         Tag <0x30680000 0x10000> "PWM3"
+         Tag <0x30690000 0x10000> "PWM4"
+-        Tag <0x306A0000 0x10000> "System_Counter_RD"
+-        Tag <0x306B0000 0x10000> "System_Counter_CMP"
+         Tag <0x306C0000 0x10000> "System_Counter_CTRL"
+         Tag <0x307C0000 0x10000> "PERFMON1"
+         Tag <0x307D0000 0x10000> "PERFMON2"
+diff --git a/platforms/boards/toradex-verdin-imx8mp-4gb.repl b/platforms/boards/toradex-verdin-imx8mp-4gb.repl
+new file mode 100644
+index 0000000..5696254
+--- /dev/null
++++ b/platforms/boards/toradex-verdin-imx8mp-4gb.repl
+@@ -0,0 +1,6 @@
++// Toradex Verdin iMX8M Plus Quad 4GB IT (product 0063, no Wi-Fi/BT)
++using "platforms/boards/toradex-verdin-imx8mp.repl"
++
++// 4 GiB LPDDR4: 3 GiB at 0x40000000 + 1 GiB above the 4 GiB boundary
++memory_ddr:
++    size: 0xc0000000
+diff --git a/platforms/boards/toradex-verdin-imx8mp.repl b/platforms/boards/toradex-verdin-imx8mp.repl
+new file mode 100644
+index 0000000..c652f8a
+--- /dev/null
++++ b/platforms/boards/toradex-verdin-imx8mp.repl
+@@ -0,0 +1,80 @@
++// Toradex Verdin iMX8M Plus Quad 2GB (product 0061, no Wi-Fi/BT) system on module
++// For the 4 GiB SKU use toradex-verdin-imx8mp-4gb.repl (needs ~5+ GiB of host RAM).
++using "platforms/cpus/nxp-mimx8ml.repl"
++
++// 2 GiB LPDDR4 at 0x40000000. U-Boot sizes DRAM with get_ram_size() and passes it to Linux.
++memory_ddr:
++    size: 0x80000000
++
++memory_ddr_cortexA_cluster:
++    size: 0x40000000
++
++// Instructions per virtual second. Renode's default (100 MIPS) makes Torizon need ~65 s of virtual time
++// before systemd takes over the watchdog, so U-Boot's 60 s watchdog resets the board. Higher values make
++// every busy-wait (U-Boot's autoboot countdown, udelay) proportionally more expensive to emulate, since
++// counter polling runs ~13x slower than regular code. 400 MIPS reaches the takeover in ~18 s.
++cpu0:
++    PerformanceInMips: 400
++
++cpu1:
++    PerformanceInMips: 400
++
++cpu2:
++    PerformanceInMips: 400
++
++cpu3:
++    PerformanceInMips: 400
++
++// SDMA instead of PIO: Linux sdhci-esdhc-imx busy-waits 100 us per block in PIO mode
++usdhc2:
++    dmaSupported: true
++
++usdhc3:
++    dmaSupported: true
++
++gpt1:
++    frequency: 24000000
++
++gpt2:
++    frequency: 24000000
++
++gpt3:
++    frequency: 24000000
++
++gpt4:
++    frequency: 24000000
++
++gpt5:
++    frequency: 24000000
++
++gpt6:
++    frequency: 24000000
++
++// Gigabit Ethernet PHY (KSZ9131) on the EQOS MAC
++phy_qos: Network.EthernetPhysicalLayer @ eth_qos 7
++    Id1: 0x0022
++    Id2: 0x1642
++    AutoNegotiationAdvertisement: 0x1e1
++    AutoNegotiationLinkPartnerBasePageAbility: 0x1e1
++    MasterSlaveControl: 0x300
++    MasterSlaveStatus: 0x3000
++
++// Second Ethernet PHY on the FEC MAC (Verdin Development Board)
++phy_mac: Network.EthernetPhysicalLayer @ eth_mac 7
++    Id1: 0x0022
++    Id2: 0x1622
++    AutoNegotiationAdvertisement: 0x1e1
++    AutoNegotiationLinkPartnerBasePageAbility: 0x1e1
++    MasterSlaveControl: 0x300
++    MasterSlaveStatus: 0x3000
++
++// On-module I2C (i2c1)
++pmic: Mocks.DummyI2CSlave @ i2c1 0x25 // pca9450c
++rtc: Mocks.DummyI2CSlave @ i2c1 0x32 // rx8130
++temp_sensor: Mocks.DummyI2CSlave @ i2c1 0x48 // tmp1075
++adc: Mocks.DummyI2CSlave @ i2c1 0x49 // ads1015
++module_eeprom: Mocks.DummyI2CSlave @ i2c1 0x50 // 24c02
++
++sysbus:
++    init add:
++        Tag <0x30350440 0x4> "OCOTP_TESTER3" 0x00000500 // 1800 MHz Speed grade
+diff --git a/scripts/single-node/toradex-verdin-imx8mp_torizon.resc b/scripts/single-node/toradex-verdin-imx8mp_torizon.resc
+new file mode 100644
+index 0000000..37df455
+--- /dev/null
++++ b/scripts/single-node/toradex-verdin-imx8mp_torizon.resc
+@@ -0,0 +1,55 @@
++:name: Toradex Verdin iMX8M Plus - Torizon OS
++:description: Boots an official Torizon OS image (TF-A + U-Boot from imx-boot, eMMC from the Tezi rootfs)
++
++# Artifacts produced by torizon/prepare-image.sh from the official Tezi image
++$torizon_dir?=@../torizon/out/verdin-imx8mp
++$uboot_bin?=$torizon_dir/u-boot.bin
++$bl31_bin?=$torizon_dir/bl31.bin
++$emmc_img?=$torizon_dir/emmc.img
++$emmc_boot0_img?=$torizon_dir/emmc-boot0.img
++$emmc_size?=0x80000000     # must match EMMC_SIZE_MB used by prepare-image.sh (default 2048)
++$emmc_persistent?=False
++
++$name?="verdin-imx8mp"
++$platform?=@platforms/boards/toradex-verdin-imx8mp.repl   # or toradex-verdin-imx8mp-4gb.repl (rebuild with PRODUCT_ID=63)
++using sysbus
++mach create $name
++
++machine LoadPlatformDescription $platform
++
++using sysbus.ca53Cluster
++
++# Spoof the i.MX8MP Boot ROM API (see nxp-imx8mplus_linux.resc): g_rom_api at 0x980,
++# query_boot_infor (+0x10) points to a stub reporting BT_DEV_TYPE_MMC, instance 2 (uSDHC3 eMMC),
++# so U-Boot picks mmc 2 for its environment, like after a real eMMC boot.
++sysbus WriteQuadWord 0x990 0x1000 cpu0
++cpu0 AssembleBlock 0x1000 """
++  movz w2, #2, lsl #16;
++  movk w2, #2;
++  str  w2, [x1];
++  movz w0, #0xf0;
++  ret
++""" triple="arm64"
++
++showAnalyzer uart3
++
++machine SdCardFromFile $emmc_img usdhc3 size=$emmc_size persistent=$emmc_persistent name="emmc" emmc=true bootPartition0Image=$emmc_boot0_img
++
++macro reset
++"""
++    # What SPL leaves behind: U-Boot proper (+ control DTB) and BL31 in memory, entering BL31 at EL3
++    sysbus LoadBinary $uboot_bin 0x40200000
++    sysbus LoadBinary $bl31_bin 0x970000
++
++    ca53Cluster ForEach IsHalted true
++    cpu0 PC 0x970000
++    # cpu0 is unhalted to start TF-A -> U-Boot; remaining cores are released by PSCI
++    cpu0 IsHalted false
++
++    # Disable the power-on Watchdog Timer. On hardware this is handled by the bootrom
++    wdog1 WriteWord 0x8 0x0
++    wdog2 WriteWord 0x8 0x0
++    wdog3 WriteWord 0x8 0x0
++"""
++
++runMacro $reset

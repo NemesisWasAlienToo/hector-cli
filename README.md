@@ -416,7 +416,7 @@ These are appended after any per-step `args:` keys defined in the YAML, so per-s
 
 ### Simulation mode
 
-Runs the [`prepare:`](#prepare) steps, then launches one Renode emulation per job in the Docker container (a failing prepare step skips it, exit 1). Each machine declared in the YAML becomes a named Renode machine in that emulation. The Renode monitor is interactive; type `help` at the prompt for available commands.
+Runs the [`prepare:`](#prepare) steps, then launches one Renode emulation per job in the Docker container (a failing prepare step skips it, exit 1). `run` writes no reports; to get reports for the prepare steps, run them through `hector test`. Each machine declared in the YAML becomes a named Renode machine in that emulation. The Renode monitor is interactive; type `help` at the prompt for available commands.
 
 #### Gathering execution metrics (`--gather-execution-metrics`)
 
@@ -471,7 +471,7 @@ There are no flags for *every* container. Each container gets the flags declared
 the thing it runs:
 
 - **`renode.docker-flags`** — the Renode containers: the emulation (`run`), robot tests
-  (renode-test), the background sim of `requires_sim: true`, and module builds.
+  (renode-test), the background sim of `requires-machine: true`, and module builds.
 - **A `shell` test's or `prepare:` step's own `docker-flags:`** — that test's or step's
   containers only (a `shell` test in the Renode image doesn't get the Renode flags).
 
@@ -511,6 +511,8 @@ warning.
 #### Container networking
 
 Every container hector starts — the Renode emulation (`run`), robot tests, `shell` tests, `prepare:` steps and module builds — runs with `--net=host`. GDB servers (`--debug`), `tcp:` mappings and anything a step listens on are reachable from the host on the same port, and steps can reach host services on `localhost`. No port publishing is involved.
+
+With a remote Docker daemon (`DOCKER_HOST=tcp://docker:2375`, as with a CI's Docker-in-Docker service), "the host" is the daemon's machine: containers still reach each other on `localhost`, and hector itself connects to the background sim's monitor on the `DOCKER_HOST` host. Bind mounts use host paths, so the project must be at the same path on the daemon's machine (CI runners share their build directory with the DinD service).
 
 #### Container user
 
@@ -669,13 +671,13 @@ The configuration lives in `.hector.yaml`.
 
 | Field | Required | Description |
 |---|---|---|
-| `version` | No | Schema version (currently `"0.1"`). Warns if unrecognised. |
+| `version` | No | Schema version, currently `"0.2"`. `"0.1"` is an error listing what changed; another unknown value warns. |
 | `renode` | Yes¹ | Section: `image:` — a Renode version (`1.16.1` → `antmicro/renode:1.16.1`) or any Docker image; optional `docker-flags:` for the Renode containers. See [choosing Renode](#choosing-renode-renodeimage----renode-image) and [extra Docker flags](#extra-docker-flags-docker-flags). |
 | `arguments` | No | Scalar defaults, overridable by env var or `--set`. |
 | `matrix` | No | Cross-product job expansion. |
 | `modules` | No | Verilated / C# peripheral type definitions. |
 | `hubs` | No | Emulation-level connection objects (uart, can, ethernet, gpio, usb, wireless, ble, wisun). |
-| `machines` | No | The machines to simulate. Optional: a config may only run `shell` tests. `run`/`export`, robot tests and `requires_sim: true` shell tests require at least one. |
+| `machines` | No | The machines to simulate. Optional: a config may only run `shell` tests. `run`/`export`, robot tests and `requires-machine: true` shell tests require at least one. |
 | `connections` | No | Global signal wiring. |
 | `mappings` | No | Emulated peripheral → host resource bindings. |
 | `prepare` | No | Shell steps run before anything uses the Renode image: fetch/compile inputs, build the image. |
@@ -1058,6 +1060,10 @@ other field. Worked examples:
   and running against the pinned release image.
 - [`examples/nucleo-h753zi`](examples/nucleo-h753zi) — the other side: a board that
   **is** shipped, loaded via `using` and *patched* inline, booting Hubris.
+- [`examples/torizon-verdin-imx8mp`](examples/torizon-verdin-imx8mp) — the
+  unmodified Torizon OS image booting to its login prompt on a Toradex Verdin iMX8M
+  Plus: prepare steps build a patched Renode and the eMMC image from the official
+  Tezi tarball; `renode.docker-flags` caps the container at 3 GB / 4 CPUs.
 - [`examples/custom-renode-image`](examples/custom-renode-image) — a prepare step
   builds the Renode image that `renode.image` names; the sim and tests then use it.
 - [`examples/external-firmware-resc`](examples/external-firmware-resc) — firmware
@@ -1304,13 +1310,19 @@ Each entry has the shape of a `shell` test (`name`, optional `image` and
 
 - **No `image:` runs it on the host**, in the hectorfile's folder (a `shell` test
   without `image:` runs in the Renode image instead, which may not exist yet here).
-- **The emulation never runs** during prepare: `requires_sim` (and `type`) are config
-  errors. Use a `shell` test with `requires_sim: true` for that.
+- **The emulation never runs** during prepare: `requires-machine` (and `type`) are config
+  errors. Use a `shell` test with `requires-machine: true` for that.
 
 Entries run in order and stop at the first failure, which also skips the emulation and
 tests (exit 1). They share the bind-mounted project, so a file a prepare step writes is
-simply there afterwards. Each entry is reported like a test (`type: "prepare"`, with its
-own `report.html`). Under `--no-docker`, every entry runs on the host.
+simply there afterwards. Under `hector test`, each entry is reported like a test
+(`type: "prepare"`, with its own `report.html`); `hector run` writes no reports — its
+output is in the terminal. Under `--no-docker`, every entry runs on the host.
+
+A step without `image:` runs whatever its script says **on your machine**, with your
+user's rights. That's no more than hector itself can do (it drives Docker, which is
+root-equivalent), but it does mean a hectorfile is code: run hectorfiles you trust, and
+in CI, run hector against an isolated Docker daemon (e.g. Docker-in-Docker).
 
 Pass **`--skip-prepare`** to `hector run` or `hector test` to skip the prepare steps and
 reuse what an earlier run left behind — e.g. iterating on a test without re-fetching
@@ -1348,7 +1360,7 @@ tests:
 
 There are two test types: **`robot`** (boots the emulation and drives it with Robot
 Framework) and **`shell`** (runs a shell script in a container). A `shell` test runs
-without an emulation unless it sets `requires_sim: true`, which runs the emulation in
+without an emulation unless it sets `requires-machine: true`, which runs the emulation in
 the background for it (see below).
 
 #### type: robot
@@ -1464,16 +1476,16 @@ Each step's `script` runs **inside a one-off Docker container** with the project
 - **`docker-flags:`** adds `docker run` flags (mounts, `--device`, env, …) to this test's containers only. See [extra Docker flags](#extra-docker-flags-docker-flags).
 - **`--no-docker`** runs the script on the host instead, ignoring `image:` (with a warning). See [Running without Docker](#running-without-docker---no-docker).
 
-##### `requires_sim: true` — the emulation in the background
+##### `requires-machine: true` — the emulation in the background
 
 By default a `shell` test runs without Renode (compile, fetch, lint, check a file), so it
-also works when the config defines **no machines at all**. Set `requires_sim: true` to
+also works when the config defines **no machines at all**. Set `requires-machine: true` to
 run the test **against a live emulation**:
 
 ```yaml
 - name: Talk to the running firmware
   type: shell
-  requires_sim: true
+  requires-machine: true
   image: python:3.12-slim
   script: |
     python3 checks/monitor.py 'mach set "mcu"' 'sysbus GetSymbolAddress "main"'
@@ -1496,8 +1508,12 @@ first client gets a banner), plus any `tcp:` [mappings](#mappings) — e.g.
 `usart2 -> tcp:3456:raw` under the machine puts its console on `localhost:3456`. A
 `pty` mapping won't work here: the pty exists only inside Renode's container. With
 `--snapshot` (or a test `snapshot:`), the snapshot is loaded and started instead of
-the resc. See [`examples/background-sim`](examples/background-sim) for a working
-monitor client.
+the resc — so host-side [mappings](#mappings) (`tcp:`, `pty:`, `file:` terminals)
+don't exist then: Renode doesn't save them, and the resc that creates them isn't run.
+See [`examples/background-sim`](examples/background-sim) for a working monitor client.
+
+> **Migration:** `requires_sim` was renamed to `requires-machine` (a config error with
+> the fix). It now defaults to `false`.
 
 A test that needs the emulation but finds no machine defined is skipped and marked
 failed.
@@ -1653,7 +1669,7 @@ results/                           # test + simulation output (override with --o
 │   ├── report.html               # human-readable report (all test types)
 │   ├── log.html                  # robot only: full interactive log
 │   ├── robot_output.xml          # robot only: native Robot Framework XML
-│   └── renode.log                # shell + requires_sim: true only: the emulation's log
+│   └── renode.log                # shell + requires-machine: true only: the emulation's log
 ├── test_1_<name>/
 │   └── report.html
 ├── artifacts/                     # files collected by the top-level 'artifacts:' globs
@@ -1672,7 +1688,7 @@ its `status`, `duration`, `commands`, and relative paths to its detail artifacts
 ## Complete example
 
 ```yaml
-version: "0.1"
+version: "0.2"
 renode:
   image: "1.16.1"
 

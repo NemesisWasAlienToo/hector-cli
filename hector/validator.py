@@ -48,6 +48,14 @@ REMOVED_TOP_KEYS = {"build": _BUILD_RENAMED, "setup": _BUILD_RENAMED,
                     "renode_version": _RENODE_MERGED, "renode_image": _RENODE_MERGED,
                     "docker_args": _DOCKER_ARGS_MOVED}
 
+# Schema versions this hector no longer reads → what changed since (a config error).
+OLD_SCHEMA_VERSIONS = {"0.1": (
+    "Schema 0.1 is no longer supported; update the config and set version: \"0.2\". "
+    "Changes: `renode_version:`/`renode_image:` → a `renode:` section with `image:` "
+    "(and optional `docker-flags:`); `docker_args:` → `renode.docker-flags` or a "
+    "test's/prepare step's own `docker-flags:`; `build:` → `prepare:` (a step without "
+    "`image:` runs on the host); `requires_sim` → `requires-machine` (default false).")}
+
 # Test types renamed this schema version → current name (old configs still run).
 _RENAMED_TEST_TYPES = {"bash": "shell", "docker": "shell"}
 
@@ -85,7 +93,9 @@ def validate_config(config) -> Tuple[List[Issue], List[Issue]]:
 
     # ---- version ----
     schema_ver = config.get("version")
-    if schema_ver is not None:
+    if str(schema_ver) in OLD_SCHEMA_VERSIONS:
+        err("version", OLD_SCHEMA_VERSIONS[str(schema_ver)])
+    elif schema_ver is not None:
         sv = str(schema_ver)
         if sv not in SUPPORTED_SCHEMA_VERSIONS:
             warn("version", f"'{sv}' is not in supported schema versions "
@@ -284,11 +294,12 @@ def validate_config(config) -> Tuple[List[Issue], List[Issue]]:
                 if "docker-flags" in block and not block.get("image"):
                     err(f"{bp}.docker-flags", "Only applies to a step with an 'image:' "
                         "(without one, it runs on the host).")
-                if "requires_sim" in block or "type" in block:
-                    key = "requires_sim" if "requires_sim" in block else "type"
+                if any(k in block for k in ("requires-machine", "requires_sim", "type")):
+                    key = next(k for k in ("requires-machine", "requires_sim", "type")
+                               if k in block)
                     err(f"{bp}.{key}", "Prepare steps are shell steps that run before the "
                         "emulation exists; they can't start it. Use a shell test with "
-                        "'requires_sim: true' instead.")
+                        "'requires-machine: true' instead.")
                 _validate_shell_steps(block, bp, err, warn)
 
     # ---- tests ----
@@ -310,15 +321,17 @@ def validate_config(config) -> Tuple[List[Issue], List[Issue]]:
             if rtype not in TEST_RUNNERS:
                 err(f"{p}.type", f"Unknown test type '{rtype}'. "
                     f"Available: {', '.join(sorted(TEST_RUNNERS.keys()))}.")
-            if "requires_sim" in test and not isinstance(test["requires_sim"], bool):
-                err(f"{p}.requires_sim", "Must be true or false.")
+            if "requires_sim" in test:
+                err(f"{p}.requires_sim", "Renamed to 'requires-machine' — rename the key.")
+            if "requires-machine" in test and not isinstance(test["requires-machine"], bool):
+                err(f"{p}.requires-machine", "Must be true or false.")
             _validate_docker_flags(test, p, err)
             if rtype == "robot" and "docker-flags" in test:
                 err(f"{p}.docker-flags", "robot tests run in the Renode container; set its "
                     "flags in 'renode.docker-flags'.")
-            if rtype == "robot" and test.get("requires_sim") is False:
-                warn(f"{p}.requires_sim", "robot tests always need the simulation; "
-                     "'requires_sim: false' is ignored.")
+            if rtype == "robot" and test.get("requires-machine") is False:
+                warn(f"{p}.requires-machine", "robot tests always need the simulation; "
+                     "'requires-machine: false' is ignored.")
             _validate_shell_steps(test, p, err, warn)
 
     # ---- quantum ----

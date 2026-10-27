@@ -227,3 +227,32 @@ def test_no_image_runs_the_script_on_the_host(monkeypatch, tmp_path):
                         lambda cmd, **kw: calls.append((cmd, kw["cwd"])) or _Proc())
     docker.run_in_container("docker build -t r:1 .", None)
     assert calls == [(["bash", "-c", "set -ex\ndocker build -t r:1 ."], str(tmp_path))]
+
+
+def test_no_docker_env_values_become_strings(monkeypatch, tmp_path):
+    # The background sim passes its monitor port as an int.
+    monkeypatch.setattr(core, "NO_DOCKER", True)
+    monkeypatch.setattr(core, "CONFIG_DIR", str(tmp_path))
+    envs = []
+
+    class _Proc:
+        returncode, stdout = 0, ""
+
+    monkeypatch.setattr(docker.subprocess, "run",
+                        lambda cmd, **kw: envs.append(kw["env"]) or _Proc())
+    docker.run_in_container("true", "img", env={"HECTOR_MONITOR_PORT": 4567})
+    assert envs[0]["HECTOR_MONITOR_PORT"] == "4567"
+
+
+@pytest.mark.parametrize("docker_host,expected", [
+    (None, "127.0.0.1"),
+    ("unix:///var/run/docker.sock", "127.0.0.1"),
+    ("tcp://docker:2375", "docker"),
+    ("tcp://[::1]:2376", "::1"),
+])
+def test_monitor_host_follows_docker_host(monkeypatch, docker_host, expected):
+    if docker_host:
+        monkeypatch.setenv("DOCKER_HOST", docker_host)
+    else:
+        monkeypatch.delenv("DOCKER_HOST", raising=False)
+    assert docker._monitor_host() == expected

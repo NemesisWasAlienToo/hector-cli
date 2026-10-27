@@ -1,0 +1,73 @@
+# Torizon OS 7.8.0+build.60 on Toradex Verdin iMX8M Plus (2 GB, no Wi-Fi/BT): boot to the login prompt.
+# Run: hector test   (hector >= 0.11)
+
+version: "0.2"
+
+# Patched Renode, built by the first prepare step. Caps keep a misbehaving emulation from taking
+# the host down.
+renode:
+  image: "renode-verdin:1.17.0-torizon"
+  docker-flags:
+    - --memory=3g
+    - --memory-swap=3g
+    - --cpus=4
+    - -e DOTNET_GCHeapHardLimit=0x80000000
+    - -e DOTNET_GCConserveMemory=5
+
+# Host steps (no image:): they run docker themselves. Both are no-ops when up to date.
+prepare:
+  - name: Build the patched Renode image
+    script: |
+      docker build -t renode-verdin:1.17.0-torizon renode/
+
+  - name: Build the boot images from the Torizon OS Tezi image
+    script: |
+      torizon/prepare-images.sh images/
+
+machines:
+  verdin:
+    platform:
+      - platforms/toradex-verdin-imx8mp.repl
+    resc: |
+      using sysbus
+      using sysbus.ca53Cluster
+
+      # Boot ROM API stub: query_boot_infor reports eMMC on uSDHC3 (mmc 2), like a real eMMC boot
+      sysbus WriteQuadWord 0x990 0x1000 cpu0
+      cpu0 AssembleBlock 0x1000 """
+        movz w2, #2, lsl #16;
+        movk w2, #2;
+        str  w2, [x1];
+        movz w0, #0xf0;
+        ret
+      """ triple="arm64"
+
+      machine SdCardFromFile @images/emmc.img usdhc3 size=0x80000000 persistent=false name="emmc" emmc=true bootPartition0Image=@images/emmc-boot0.img
+
+      macro reset
+      """
+          # What SPL leaves behind: U-Boot proper and BL31 in memory, entering BL31 at EL3
+          sysbus LoadBinary @images/u-boot.bin 0x40200000
+          sysbus LoadBinary @images/bl31.bin 0x970000
+          ca53Cluster ForEach IsHalted true
+          cpu0 PC 0x970000
+          cpu0 IsHalted false
+          # The boot ROM disables the power-on watchdogs
+          wdog1 WriteWord 0x8 0x0
+          wdog2 WriteWord 0x8 0x0
+          wdog3 WriteWord 0x8 0x0
+      """
+      runMacro $reset
+    # Console of TF-A, U-Boot and Linux
+    mappings: |
+      uart3 -> file:results/console.log
+
+# Stock bootargs include `quiet`: the kernel is silent until userspace
+tests:
+  - name: Boots to login
+    type: robot
+    script: |
+      Create Terminal Tester    sysbus.uart3    timeout=600
+      Wait For Line On Uart     Starting kernel ...
+      Wait For Line On Uart     Torizon OS 7.8.0+build.60 verdin-imx8mp-12345678 ttymxc2
+      Wait For Prompt On Uart   verdin-imx8mp-12345678 login:
