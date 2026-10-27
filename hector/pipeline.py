@@ -228,7 +228,8 @@ def build_job_config(action, config, args, *, test_mode=False):
 
     # Clone Renode only when the config actually needs the source; otherwise skip it
     # entirely (a ~200 MB clone) and leave the framework vars empty.
-    if _needs_renode_source(config):
+    # `prepare` never builds modules or the resc, so it needs no checkout either.
+    if action is not action_prepare and _needs_renode_source(config):
         if not git_tag and not os.path.isdir(getattr(args, "renode_dir", None) or ""):
             raise ValueError(f"This config needs the Renode source, but the version of "
                              f"'{docker_image}' can't be inferred from its tag — tag the "
@@ -598,6 +599,10 @@ def action_simulate(state, cfg, result):
                runtime=state.runtime)
 
 
+def action_prepare(state, cfg, result):
+    """`prepare`: never called — run_job stops after the prepare phase for it."""
+
+
 def action_export(state, cfg, result):
     """`export`: generate the files, then print the command that would run instead
     of running it (a `docker run ... renode ...`, or a bare `renode ...` under
@@ -675,6 +680,11 @@ def run_job(i, total_jobs, job_context, cfg):
             # Only `test` writes reports; `run` shows prepare output in the terminal.
             prepare_results = run_prepare_steps(
                 prepare_blocks, cfg.output_dir if cfg.test_mode else None, live=cfg.live)
+        if cfg.action is action_prepare:
+            if not cfg.config.get("prepare"):
+                print("[PREPARE] No 'prepare:' steps defined; nothing to do.")
+            result["passed"] = all(r.passed for r in prepare_results)
+            return result
         if not all(r.passed for r in prepare_results):
             print("\n[PREPARE] a prepare step failed — skipping the simulation/tests.")
             result["test_results"] = prepare_results

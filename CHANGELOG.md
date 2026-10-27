@@ -4,6 +4,13 @@ All notable changes to `hector-cli`. Versions follow [semver](https://semver.org
 while hector is 0.x, a minor version may contain breaking changes (marked
 **Breaking**).
 
+## 0.12.0 — 2026-10-27
+
+### Added
+- `hector prepare`: run only the `prepare:` steps (no emulation, no tests) for one job;
+  exit 1 if one fails. For tools that start the emulation themselves from
+  `hector export`, which never runs prepare steps.
+
 ## 0.11.0 — 2026-10-27
 
 ### Added

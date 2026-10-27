@@ -13,7 +13,7 @@ def _parse(argv):
 def test_all_subcommands_registered():
     parser = build_parser()
     # Each known subcommand must parse and bind an executable _command.
-    for cmd in ("run", "test", "export", "validate", "init", "clean"):
+    for cmd in ("run", "test", "prepare", "export", "validate", "init", "clean"):
         args = parser.parse_args([cmd])
         assert hasattr(args, "_command")
         assert args._command.name == cmd
@@ -84,3 +84,8 @@ def test_export_has_no_skip_prepare():
     # export never runs prepare, so the flag would be meaningless there.
     with pytest.raises(SystemExit):
         _parse(["export", "--skip-prepare"])
+
+
+def test_prepare_takes_the_job_selection_flags():
+    args = _parse(["prepare", "--job", "BOARD=a", "--set", "X=1", "-f", "c.yaml"])
+    assert args.job and args.set_args == ["X=1"]

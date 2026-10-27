@@ -109,6 +109,7 @@ Then simulate or test:
 hector run     # simulate (interactive Renode monitor)
 hector test    # run the tests: section
 hector export  # print the run command without executing it
+hector prepare # run only the prepare: steps
 ```
 
 Generated files go in `.hector/` — add it to your `.gitignore`. The Renode **binary** runs from the Docker image; the Renode **source** is only cloned when a config needs it (see [Renode source checkout](#renode-source-checkout)).
@@ -186,6 +187,7 @@ the CLI natively with `pip` and let hector launch real per-step containers.
 | `hector run --snapshot snap.save --renode-image 1.16.1` | Load a snapshot without a `.hector.yaml` |
 | `hector test` | Run the [`prepare:`](#prepare) steps, then the `tests:` section; exit 1 on any failure |
 | `hector test --fail-fast` | Stop after the first failing test |
+| `hector prepare` | Run only the [`prepare:`](#prepare) steps — no emulation, no tests; exit 1 on failure |
 | `hector test --skip-prepare` | Skip the [`prepare:`](#prepare) steps and reuse what an earlier run prepared (also on `run`) |
 | `hector test --test-file tests/boot.robot` | Run a specific `.robot` file instead of the YAML tests |
 | `hector test --test-name "Button press"` | Run only tests whose name contains the given substring |
@@ -1331,6 +1333,16 @@ firmware or rebuilding the image:
 ```bash
 hector test                          # prepares, then tests
 hector test --skip-prepare           # tests only, against the existing outputs
+```
+
+**`hector prepare`** runs only the prepare steps and exits — 1 if one fails. Use it
+when something else starts the emulation: `hector export` never runs prepare steps,
+so a tool that launches the exported command runs `hector prepare` first. It takes the
+same `-f`, `--set` and `--job` flags as `run`/`test`, and writes no reports.
+
+```bash
+hector prepare --job BOARD=stm32f4   # fetch / build what that job needs
+hector export  --job BOARD=stm32f4   # then print the command that runs it
 ```
 
 > **Migration:** the `build:` section was renamed to `prepare:` (`build:`/`setup:` are
