@@ -87,7 +87,28 @@ def test_no_docker_steps_run_in_config_dir(monkeypatch, tmp_path):
     docker.run_in_container("true", "img")
     docker.run_renode_test("t.robot", "img", "res")
     docker.run_renode("j.resc", "img")
-    assert cwds == [str(tmp_path / "sub")] * 4
+    sub = str(tmp_path / "sub")
+    # renode-test runs from its results dir (see test_renode_test_runs_from_results_dir).
+    assert cwds == [sub, sub, str(tmp_path / "res"), sub]
+
+
+def test_renode_test_runs_from_results_dir(monkeypatch, tmp_path):
+    # Renode's launcher appends its own `-r $(pwd)`; running from the results dir makes
+    # it agree with ours, and the inputs must then be absolute.
+    monkeypatch.setattr(core, "CONFIG_DIR", str(tmp_path / "sub"))
+    calls = []
+
+    class _Proc:
+        returncode = 0
+
+    monkeypatch.setattr(docker.subprocess, "run", lambda cmd, **kw: calls.append(cmd) or _Proc())
+    docker.run_renode_test("t.robot", "img", "results/test_0_x", resc_host_path="j.resc")
+    cmd = calls[0]
+    results = str(tmp_path / "results" / "test_0_x")
+    assert cmd[cmd.index("-w") + 1] == results
+    assert cmd[cmd.index("-r") + 1] == results
+    assert str(tmp_path / "t.robot") in cmd
+    assert f"RESC:{tmp_path / 'j.resc'}" in cmd
 
 
 def test_docker_argv_does_not_publish_ports():

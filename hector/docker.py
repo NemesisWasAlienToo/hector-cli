@@ -47,8 +47,11 @@ def _user_flags():
     return ["-u", f"{ids[0]}:{ids[1]}"] if ids else []
 
 
-def _workspace_mount():
-    return ["-v", f"{core.workspace_root()}:{core.WORKSPACE_MOUNT}", "-w", core.execution_dir()]
+def _workspace_mount(workdir=None):
+    """Bind-mount the workspace and set the working directory (default: the config's
+    directory, core.execution_dir)."""
+    return ["-v", f"{core.workspace_root()}:{core.WORKSPACE_MOUNT}",
+            "-w", workdir or core.execution_dir()]
 
 
 def _extra_mounts():
@@ -190,24 +193,30 @@ def run_renode_test(robot_file_host, image, results_dir_host,
     the generated emulation script via ${RESC}.
     extra_args: optional list of additional flags forwarded verbatim to renode-test.
     interactive: attach stdin/tty and X display (useful with Pause Execution).
+
+    renode-test runs FROM the results dir: Renode's launcher adds its own `-r $(pwd)`,
+    which (depending on the Renode version) can come after ours and win — running
+    there makes both agree. Inputs are passed as absolute paths for the same reason.
+    Renode itself is started by renode-test in its own install dir, so this doesn't
+    change how paths inside the tests resolve.
     """
     os.makedirs(results_dir_host, exist_ok=True)
     if core.NO_DOCKER:
-        # Absolute paths: renode-test runs in the config's directory, not the cwd.
-        cmd = ["renode-test", os.path.abspath(robot_file_host),
-               "-r", os.path.abspath(results_dir_host)]
+        results_dir = os.path.abspath(results_dir_host)
+        cmd = ["renode-test", os.path.abspath(robot_file_host), "-r", results_dir]
         if resc_host_path:
             cmd += ["--variable", f"RESC:{os.path.abspath(resc_host_path)}"]
         if extra_args:
             cmd += extra_args
-        result = subprocess.run(cmd, cwd=core.execution_dir())
+        result = subprocess.run(cmd, cwd=results_dir)
         return result.returncode == 0
+    results_dir = to_container_path(results_dir_host)
     flags = ["-it"] if interactive else []
     display = _xdisplay_args() if interactive else []
     cmd = ["docker", "run", "--rm", *flags, *_HOST_NETWORK, *display,
-           *_workspace_mount(), *_extra_mounts(), *_user_flags(), *_runtime_flags(runtime),
-           image, "renode-test", to_container_path(robot_file_host),
-           "-r", to_container_path(results_dir_host)]
+           *_workspace_mount(workdir=results_dir), *_extra_mounts(), *_user_flags(),
+           *_runtime_flags(runtime),
+           image, "renode-test", to_container_path(robot_file_host), "-r", results_dir]
     if resc_host_path:
         cmd += ["--variable", f"RESC:{to_container_path(resc_host_path)}"]
     if extra_args:

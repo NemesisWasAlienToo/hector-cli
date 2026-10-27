@@ -168,6 +168,9 @@ def apply_docker_args(config, args):
     for item in ([raw] if isinstance(raw, str) else raw):
         flags += shlex.split(str(item))
     _core.DOCKER_ARGS = flags + shlex.split(getattr(args, "docker_args", "") or "")
+    if _core.NO_DOCKER and _core.DOCKER_ARGS:
+        print(f"[WARN] --no-docker: docker args '{shlex.join(_core.DOCKER_ARGS)}' are "
+              "ignored; running on the host.")
 
 
 def _resolve_set_overrides(args):

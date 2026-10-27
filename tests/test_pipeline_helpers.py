@@ -116,8 +116,19 @@ def test_workspace_mount_from_config_dir_needs_no_extra_mount(config_in_subdir, 
 def test_apply_docker_args(monkeypatch, cfg, flag, expected):
     from hector import core, pipeline
     monkeypatch.setattr(core, "DOCKER_ARGS", [])
+    monkeypatch.setattr(core, "NO_DOCKER", False)
     pipeline.apply_docker_args(cfg, SimpleNamespace(docker_args=flag))
     assert core.DOCKER_ARGS == expected
+
+
+@pytest.mark.parametrize("cfg,warns", [({"docker_args": "-v /a:/a"}, True), ({}, False)])
+def test_docker_args_warn_under_no_docker(monkeypatch, capsys, cfg, warns):
+    from hector import core, pipeline
+    monkeypatch.setattr(core, "DOCKER_ARGS", [])
+    monkeypatch.setattr(core, "NO_DOCKER", True)
+    pipeline.apply_docker_args(cfg, SimpleNamespace(docker_args=""))
+    assert ("[WARN] --no-docker: docker args '-v /a:/a' are ignored"
+            in capsys.readouterr().out) == warns
 
 
 # ---- resolve_renode_image ----
