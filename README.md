@@ -307,19 +307,41 @@ hector test --test-name "Button press" --live
 
 Both flags are independent and can be used together or separately.
 
-#### Loading a snapshot (`--snapshot`)
+`prepare:` steps always stream their output, under `hector run` and `hector test` alike: a step can run for
+minutes (building a Renode image, say), and held-back output would look like a hang.
 
-Load a previously saved Renode snapshot instead of booting from the generated resc. The snapshot restores the complete emulation state (all machines, memory, peripheral registers) and resumes execution.
+#### Snapshots: saving and loading (`--snapshot`)
 
-```bash
-# simulation mode: drop into the monitor with state restored
-hector run --snapshot results/step_1_Linux_boots/snapshot.save
+A snapshot is Renode's saved emulation state: all machines, memory, CPU and
+peripheral registers. Loading one resumes from exactly that point.
 
-# test mode: every test starts from the snapshot instead of booting
-hector test --snapshot results/step_1_Linux_boots/snapshot.save
+**Saving.** In the monitor of `hector run`, save under `$PROJECT`, a monitor variable
+hector sets to the hectorfile's folder (`hector run` prints this hint too):
+
+```
+(machine-0) Save $PROJECT/snapshots/post_boot.save
 ```
 
-When used with `--renode-image`, no `.hector.yaml` is needed at all — useful for inspecting a snapshot outside of any project:
+Create the folder first: a `Save` that fails (missing folder, unwritable path) makes
+Renode exit. Don't use `Save @snapshots/post_boot.save`: Renode resolves a relative
+path it writes against its own install folder, which isn't writable. When a robot test
+fails, renode-test also saves the state at the failure into
+`results/<test>/snapshots/<…>.fail0.save`.
+
+`$PROJECT` works in any monitor command and in your `resc:` / `commands:`, e.g.
+`sysbus LoadELF $PROJECT/build/app.elf`.
+
+**Loading.**
+
+```bash
+hector run  --snapshot snapshots/post_boot.save              # resume in the monitor
+hector run  --snapshot snapshots/post_boot.save --no-start   # restored, paused
+hector test --snapshot snapshots/post_boot.save              # every test starts there
+hector run  --snapshot results/test_0_Boot/snapshots/job_1_test_0.Boot.fail0.save
+```
+
+`--snapshot` paths are relative to where you run hector. With `--renode-image`, no
+`.hector.yaml` is needed — useful for inspecting a snapshot outside any project:
 
 ```bash
 hector run --snapshot /path/to/snapshot.save --renode-image 1.16.1
@@ -327,13 +349,23 @@ hector run --snapshot /path/to/snapshot.save --renode-image 1.16.1
 
 The CLI flag overrides any per-test `snapshot:` field in the YAML (see [tests](#tests)).
 
-**Saving a snapshot** from the interactive Renode monitor:
+**What hector adds around `Load`:**
 
-```
-Save @/home/user/projects/myboard/.hector/snapshots/post_boot.save
-```
+- **Host bindings are recreated.** A snapshot holds no host-side objects: `tcp:`,
+  `pty:`, `file:` and `tap:` [mappings](#mappings) are replayed after `Load`, so e.g. a
+  console port is there again. Hubs and connections are part of the snapshot.
+- **C# assemblies are imported first**, and `--debug` GDB servers are reopened
+  (a GDB server is a live connection, never part of the saved state).
 
-Use the actual host path to your project directory (the same path you see on the host — the container mounts it at the identical location). Create the directory first.
+**Limitations (Renode's):**
+
+- Load a snapshot with the **same Renode build** that saved it; another version
+  refuses it ("This snapshot is incompatible").
+- A machine with a C# peripheral compiled from a **`.cs` source** can't be restored:
+  each load compiles a fresh assembly, which no longer matches the saved types. Use a
+  prebuilt `.dll` if you need snapshots of such a machine.
+- Without hector's resc (e.g. a bare `renode` session) there's no `$PROJECT`, and
+  relative `@paths` resolve against Renode's install folder; use absolute paths there.
 
 #### Running a specific `.robot` file (`--test-file`)
 
@@ -464,7 +496,7 @@ Everything a hectorfile executes — `shell` tests, Renode and `renode-test` —
 
 The directory you run hector from is mounted into the container (at the same path), and the container's working directory (`-w`) is the hectorfile's folder. If the hectorfile lives **outside** the directory you run from (`hector test -f ../other/.hector.yaml`), its folder is mounted as well, at its own path. (With [`--workspace-mount`](#overriding-the-workspace-mount-path---workspace-mount) the hectorfile's folder is mounted at the given path instead.) A path like `../shared/board.repl` works as long as it lands inside one of those mounts — for anything else, add a mount with [`docker-flags`](#extra-docker-flags-docker-flags). Under `--no-docker` the processes simply run with the hectorfile's folder as their cwd.
 
-**Relative `@paths` inside Renode.** The generated resc starts with `path add @<hectorfile's folder>`, so Renode looks up a relative `@path` in the hectorfile's folder first, then in its own install folder. That covers `platform:`/`firmware:`, your `resc:` and `commands:` lines (`sysbus LoadELF @fw/app.elf`, `include @scripts/setup.resc`) and `using "..."` inside `.repl` files — in `hector run` and in tests alike, even though renode-test starts Renode in its install folder. Paths that ship with Renode (`platforms/cpus/stm32f103.repl`) keep working, unless a file with the same relative path exists in the hectorfile's folder, which then takes precedence. Note that `$ORIGIN` is the generated resc's folder (`.hector/resc/`), not the hectorfile's.
+**Relative `@paths` inside Renode.** The generated resc starts with `path add @<hectorfile's folder>`, so Renode looks up a relative `@path` in the hectorfile's folder first, then in its own install folder. That covers `platform:`/`firmware:`, your `resc:` and `commands:` lines (`sysbus LoadELF @fw/app.elf`, `include @scripts/setup.resc`) and `using "..."` inside `.repl` files — in `hector run` and in tests alike, even though renode-test starts Renode in its install folder. Paths that ship with Renode (`platforms/cpus/stm32f103.repl`) keep working, unless a file with the same relative path exists in the hectorfile's folder, which then takes precedence. Note that `$ORIGIN` is the generated resc's folder (`.hector/resc/`), not the hectorfile's. That lookup only applies to reading: a path Renode **writes** (`Save`, a file it creates) is relative to its install folder, so write under `$PROJECT`, a monitor variable set to the hectorfile's folder: `Save $PROJECT/snapshots/x.save` (see [snapshots](#snapshots-saving-and-loading---snapshot)).
 
 Paths given on the **command line** (`--output`, `--snapshot`, `--test-file`, `--artifacts`, `--renode-dir`, …) stay relative to where you run hector, and `.hector/` is still created there.
 
@@ -475,6 +507,8 @@ the thing it runs:
 
 - **`renode.docker-flags`** — the Renode containers: the emulation (`run`), robot tests
   (renode-test), the background sim of `requires-machine: true`, and module builds.
+  hector starts these with `--ulimit core=0`, so a crashing Renode doesn't write a
+  core dump into your project; `--ulimit core=…` here overrides it.
 - **A `shell` test's or `prepare:` step's own `docker-flags:`** — that test's or step's
   containers only (a `shell` test in the Renode image doesn't get the Renode flags).
 
@@ -1458,7 +1492,7 @@ Provide a `snapshot:` path to load a saved Renode state instead of booting from 
     Wait For Line On Uart     pong    timeout=5
 ```
 
-This is useful when only one test in a suite needs a checkpoint — other tests still boot normally. `snapshot:` is only supported for inline `script:` tests; file-based (`file:`) tests ignore it.
+This is useful when only one test in a suite needs a checkpoint — other tests still boot normally. The path is relative to the hectorfile's folder. `snapshot:` works for `robot` tests with inline steps and for `shell` tests with `requires-machine: true`; file-based (`file:`) robot tests ignore it. As with `--snapshot`, [mappings are recreated](#snapshots-saving-and-loading---snapshot) after the load.
 
 ##### Extra renode-test flags (`args`)
 
@@ -1546,8 +1580,8 @@ first client gets a banner), plus any `tcp:` [mappings](#mappings) — e.g.
 `usart2 -> tcp:3456:raw` under the machine puts its console on `localhost:3456`. A
 `pty` mapping won't work here: the pty exists only inside Renode's container. With
 `--snapshot` (or a test `snapshot:`), the snapshot is loaded and started instead of
-the resc — so host-side [mappings](#mappings) (`tcp:`, `pty:`, `file:` terminals)
-don't exist then: Renode doesn't save them, and the resc that creates them isn't run.
+the resc; hector recreates the host-side [mappings](#mappings) after it (Renode doesn't
+save them), so e.g. a `tcp:` console is there again.
 See [`examples/background-sim`](examples/background-sim) for a working monitor client.
 
 > **Migration:** `requires_sim` was renamed to `requires-machine` (a config error with

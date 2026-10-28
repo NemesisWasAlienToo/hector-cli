@@ -256,3 +256,11 @@ def test_monitor_host_follows_docker_host(monkeypatch, docker_host, expected):
     else:
         monkeypatch.delenv("DOCKER_HOST", raising=False)
     assert docker._monitor_host() == expected
+
+
+def test_renode_containers_write_no_core_dumps(monkeypatch):
+    monkeypatch.setattr(core, "RENODE_DOCKER_FLAGS", ["--ulimit", "core=-1"])
+    argv = docker.build_renode_argv("j.resc", "img")
+    i = argv.index("core=0")
+    assert argv[i - 1] == "--ulimit"
+    assert argv.index("core=-1") > i                # the user's flag comes later and wins

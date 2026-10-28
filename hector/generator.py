@@ -177,14 +177,10 @@ def generate_emulation_resc(renode_nodes, hubs_registry, cross_connections,
                       (e.g. CreateServerSocketTerminal, CreateUartPtyTerminal)
     no_start        : omit the trailing `start` so the platform loads paused and the
                       user starts it by hand from the monitor (`hector run --no-start`)
-    search_dir      : directory prepended to Renode's search path (`path add`), so
-                      relative `@paths` resolve against it first — the config's directory,
-                      whatever directory Renode was started in (renode-test starts it in
-                      its install dir). Renode's own dirs stay searched after it.
+    search_dir      : the config's directory: relative `@paths` are read from and
+                      written to it (see search_path_lines).
     """
-    lines = []
-    if search_dir:
-        lines.append("path add @" + search_dir.replace(" ", "\\ "))   # Renode escapes spaces
+    lines = search_path_lines(search_dir)
 
     # --- emulation-level setup (terminals, etc.) – must exist before machines connect ---
     if emulation_setup:
@@ -240,7 +236,24 @@ def generate_emulation_resc(renode_nodes, hubs_registry, cross_connections,
     return content
 
 
-def snapshot_resc(snapshot_container_path, debug_config=None, no_start=False):
+def search_path_lines(work_dir):
+    """First lines of every resc, for relative paths in a Renode that runs in its
+    install dir (it switches there at startup; renode-test starts it there too):
+
+    - `path add` puts work_dir first in the search path, so reads like
+      `LoadELF @fw.elf` find project files (Renode's own dirs are searched after it);
+    - `$PROJECT` holds work_dir, for writes, which Renode resolves against its working
+      dir: `Save $PROJECT/snapshots/x.save`. (Changing the working dir instead breaks
+      Renode's own relative lookups, e.g. Python peripherals' scripts/pydev/ on Save.)
+    """
+    if not work_dir:
+        return []
+    at_path = "@" + work_dir.replace(" ", "\\ ")          # Renode escapes spaces
+    return ["path add " + at_path, "$PROJECT=" + at_path]
+
+
+def snapshot_resc(snapshot_container_path, debug_config=None, no_start=False,
+                  work_dir=None, before_load=(), after_load=()):
     """Build resc text that loads a snapshot and resumes.
 
     When debug_config ({machine_name: gdb_port}) is given, each named machine gets a
@@ -250,8 +263,13 @@ def snapshot_resc(snapshot_container_path, debug_config=None, no_start=False):
 
     no_start omits the trailing `start`, leaving the restored state paused in the
     monitor for the user to resume by hand (`hector run --snapshot ... --no-start`).
+
+    work_dir: as in generate_emulation_resc. before_load: lines the snapshot needs to
+    deserialize (C# assembly imports). after_load: host bindings to recreate — a
+    snapshot holds no sockets, ptys, file backends or taps, so the mappings are replayed.
     """
-    lines = [f"Load @{snapshot_container_path}"]
+    lines = (search_path_lines(work_dir) + list(before_load)
+             + [f"Load @{snapshot_container_path}"] + list(after_load))
     for node_name, port in (debug_config or {}).items():
         lines += [f'mach set "{node_name}"',
                   f"machine StartGdbServer {port}",

@@ -38,6 +38,7 @@ class RunnerContext:
     renode_test_args: list = field(default_factory=list)
     live: bool = False
     snapshot: str = ""
+    snapshot_setup: object = None   # pipeline.SnapshotSetup: writes snapshot loader rescs
     runtime: object = None      # RuntimeOptions: docker caps/devices/root for the run
 
 
@@ -126,7 +127,18 @@ def _write_shell_html(test_dir, test_name, step_records, passed, duration):
     return path
 
 
-def generate_robot_file(test_name, steps, resc_host_path, job_index, test_index, snapshot=""):
+def _snapshot_loader(snapshot, ctx, test_index):
+    """Write the resc that restores `snapshot` for one test (see SnapshotSetup.resc) and
+    return its host path."""
+    path = os.path.join(ARTIFACTS_DIR, "resc", f"job_{ctx.job_index}_test_{test_index}_snapshot.resc")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        f.write(ctx.snapshot_setup.resc(snapshot))
+    return path
+
+
+def generate_robot_file(test_name, steps, resc_host_path, job_index, test_index,
+                        snapshot_loader=""):
     """Generate a .robot suite: one keyword per step, one test case that calls them in order.
 
     One test case means Renode's per-test lifecycle fires exactly once — no inter-step teardowns.
@@ -144,11 +156,7 @@ def generate_robot_file(test_name, steps, resc_host_path, job_index, test_index,
             body = ["    No Operation"]
         keywords.append(kw_name + "\n" + "\n".join(body))
 
-    if snapshot:
-        boot = [f"    Execute Command    Load @{to_container_path(snapshot)}",
-                "    Execute Command    start"]
-    else:
-        boot = [f"    Execute Command    include @{to_container_path(resc_host_path)}"]
+    boot = [f"    Execute Command    include @{to_container_path(snapshot_loader or resc_host_path)}"]
 
     kw_calls = [f"    {step.get('name') or f'Step {i + 1}'}" for i, step in enumerate(steps)]
     test_case = test_name + "\n" + "\n".join(boot + kw_calls)
@@ -197,7 +205,8 @@ def _run_robot_test(test, steps, ctx, test_index):
             raise ValueError(f"Test '{test_name}': mixing file: and script: steps is not supported.")
         robot_file = generate_robot_file(
             test_name, steps, ctx.resc_host_path, ctx.job_index, test_index,
-            snapshot=effective_snapshot,
+            snapshot_loader=(_snapshot_loader(effective_snapshot, ctx, test_index)
+                             if effective_snapshot else ""),
         )
 
     t0 = time.monotonic()
@@ -280,10 +289,9 @@ def _run_shell_test(test, steps, ctx, test_index):
                 print(f"  [SIM] background emulation, monitor on port {sim.port}")
                 snapshot = ctx.snapshot or from_config(test.get("snapshot", ""))
                 if snapshot:
-                    sim.command(f"Load @{to_container_path(snapshot)}")
-                    sim.command("start")
-                else:
-                    sim.include(ctx.resc_host_path)
+                    print(f"  [SNAP] {snapshot}")
+                sim.include(_snapshot_loader(snapshot, ctx, test_index) if snapshot
+                            else ctx.resc_host_path)
                 sim.release()
                 step_records, all_commands, combined_stdout = _run_shell_steps(
                     steps, image, ctx.live, env={"HECTOR_MONITOR_PORT": sim.port},
@@ -370,7 +378,7 @@ def run_tests(tests, ctx, fail_fast=False):
     return results
 
 
-def run_prepare_steps(blocks, results_dir, live=False):
+def run_prepare_steps(blocks, results_dir):
     """Run the `prepare:` steps (compile firmware, fetch files, build the Renode image,
     ...) before anything uses the Renode image — so a prepare step can build the image
     `renode:` names.
@@ -379,7 +387,9 @@ def run_prepare_steps(blocks, results_dir, live=False):
     (that's how a step reaches `docker build`). The emulation never runs here. Returns
     one StepResult per block (type "prepare"), reported like tests; stops at the first
     failing block, since everything after depends on its outputs (the caller then
-    skips the sim/tests). results_dir=None writes no report.html (`hector run`)."""
+    skips the sim/tests). results_dir=None writes no report.html (`hector run`).
+    Output always streams: a step can run for minutes (e.g. building Renode), and
+    captured output would look like a hang."""
     if not blocks:
         return []
     print("\n[PREPARE] preparing inputs ...")
@@ -394,7 +404,7 @@ def run_prepare_steps(blocks, results_dir, live=False):
             print(f"  [WARN] --no-docker: image '{image}' is ignored; running on the host.")
 
         step_records, all_commands, combined_stdout = _run_shell_steps(
-            _normalize_steps(block), image, live,
+            _normalize_steps(block), image, True,
             docker_flags=_step_docker_flags(block, name) if image else [])
         all_passed = all(r["passed"] for r in step_records)
         total_duration = sum(r["duration"] for r in step_records)

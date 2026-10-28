@@ -317,8 +317,8 @@ def snapshot_fastpath(args):
     debug_config = parse_debug_flag(getattr(args, "debug", None), {}, 1, validate_nodes=False)
     snap_resc = os.path.join(resc_root, "snapshot.resc")
     with open(snap_resc, "w") as f:
-        f.write(snapshot_resc(to_container_path(args.snapshot), debug_config,
-                              no_start=getattr(args, "no_start", False)))
+        f.write(SnapshotSetup().resc(args.snapshot, debug_config,
+                                     no_start=getattr(args, "no_start", False)))
     print(f"[SNAP] {args.snapshot}"
           + (f" (+GDB: {debug_config})" if debug_config else ""))
     run_renode(snap_resc, docker_image, extra_args=shlex.split(args.renode_args or ""), output_dir=args.output)
@@ -568,6 +568,19 @@ class JobState:
     debug_config: dict
     tests: list
     concrete_nodes: dict
+    snapshot_setup: "SnapshotSetup" = None
+
+
+@dataclass
+class SnapshotSetup:
+    """What a snapshot loader runs around `Load` (see generator.snapshot_resc)."""
+    before_load: list = field(default_factory=list)
+    after_load: list = field(default_factory=list)
+
+    def resc(self, snapshot_host_path, debug_config=None, no_start=False):
+        return snapshot_resc(to_container_path(snapshot_host_path), debug_config,
+                             no_start=no_start, work_dir=_core.execution_dir(),
+                             before_load=self.before_load, after_load=self.after_load)
 
 
 # ---------------------------------------------------------------------------
@@ -583,8 +596,8 @@ def _resolve_active_resc(state, cfg):
         raise FileNotFoundError(f"Snapshot not found: {cfg.snapshot}")
     snap_resc = state.resc_filename.replace(".resc", "_snapshot.resc")
     with open(snap_resc, "w") as f:
-        f.write(snapshot_resc(to_container_path(cfg.snapshot), state.debug_config,
-                              no_start=cfg.no_start))
+        f.write((state.snapshot_setup or SnapshotSetup()).resc(
+            cfg.snapshot, state.debug_config, no_start=cfg.no_start))
     print(f"[SNAP] {cfg.snapshot}"
           + (f" (+GDB: {state.debug_config})" if state.debug_config else ""))
     return snap_resc
@@ -594,6 +607,8 @@ def action_simulate(state, cfg, result):
     """`run`: boot the emulation interactively in Renode."""
     if not state.resc_filename:
         raise ValueError("`hector run` needs at least one machine in 'machines:'.")
+    print("[SNAP] To save a snapshot from the monitor: Save $PROJECT/<name>.save "
+          "($PROJECT is the hectorfile's folder; the target folder must exist).")
     run_renode(_resolve_active_resc(state, cfg), cfg.docker_image,
                extra_args=cfg.renode_args, output_dir=cfg.output_dir,
                runtime=state.runtime)
@@ -638,6 +653,7 @@ def action_test(state, cfg, result):
         renode_test_args=cfg.renode_test_args,
         live=cfg.live,
         snapshot=cfg.snapshot or "",
+        snapshot_setup=state.snapshot_setup or SnapshotSetup(),
         results_dir=cfg.output_dir,
         runtime=state.runtime,
     )
@@ -679,7 +695,7 @@ def run_job(i, total_jobs, job_context, cfg):
             prepare_blocks = interpolate(copy.deepcopy(cfg.config.get("prepare", [])), context)
             # Only `test` writes reports; `run` shows prepare output in the terminal.
             prepare_results = run_prepare_steps(
-                prepare_blocks, cfg.output_dir if cfg.test_mode else None, live=cfg.live)
+                prepare_blocks, cfg.output_dir if cfg.test_mode else None)
         if cfg.action is action_prepare:
             if not cfg.config.get("prepare"):
                 print("[PREPARE] No 'prepare:' steps defined; nothing to do.")
@@ -763,6 +779,9 @@ def run_job(i, total_jobs, job_context, cfg):
         for desc in descriptors.values():
             seen_dlls.update(desc.csharp_dlls)
         emulation_setup = [f"i @{to_container_path(dll)}" for dll in seen_dlls]
+        # A snapshot loader needs the assemblies before `Load`, and the host bindings
+        # (mappings) recreated after it: snapshots don't hold sockets/ptys/files/taps.
+        snapshot_setup = SnapshotSetup(before_load=list(emulation_setup))
 
         # so_commands go into _gen_commands before mappings to preserve [so, map, user] order.
         for node_name, descriptor in descriptors.items():
@@ -776,9 +795,13 @@ def run_job(i, total_jobs, job_context, cfg):
                             for l in as_lines(_nc.get("mappings", "")))
 
         if mappings:
-            map_lines, map_runtime = maps.resolve_mappings(mappings, concrete_nodes)
+            map_lines, map_runtime, map_cmds = maps.resolve_mappings(mappings, concrete_nodes)
             emulation_setup += map_lines
             runtime.merge(map_runtime)
+            snapshot_setup.after_load += map_lines
+            for node_name in dict.fromkeys(n for n, _ in map_cmds):
+                snapshot_setup.after_load.append(f'mach set "{node_name}"')
+                snapshot_setup.after_load += [c for n, c in map_cmds if n == node_name]
 
         cross_connections = (
             conn.resolve_connections(hub_connections, concrete_nodes, hubs_registry)
@@ -838,7 +861,7 @@ def run_job(i, total_jobs, job_context, cfg):
 
         state = JobState(resc_filename=resc_filename, runtime=runtime,
                          debug_config=debug_config, tests=tests,
-                         concrete_nodes=concrete_nodes)
+                         concrete_nodes=concrete_nodes, snapshot_setup=snapshot_setup)
         cfg.action(state, cfg, result)
 
         # ---- PHASE 2.5: report (prepare steps + tests, together) ----

@@ -165,8 +165,17 @@ def prepare_env(monkeypatch, tmp_path):
     monkeypatch.setattr(runners, "run_in_container",
                         lambda script, image, live, env=None, docker_flags=():
                         runs.append((script, image, list(docker_flags)))
-                        or ("out", next(outcomes)))
+                        or runs_live.append(live) or ("out", next(outcomes)))
+    runs_live = []
+    monkeypatch.setattr(runners, "runs_live", runs_live, raising=False)
     return runners, runs, str(tmp_path)
+
+
+def test_prepare_output_always_streams(prepare_env):
+    # A long step (e.g. building Renode) must not look like a hang without --live.
+    runners, _, results_dir = prepare_env
+    runners.run_prepare_steps([{"name": "a", "script": "a"}], results_dir)
+    assert runners.runs_live == [True]
 
 
 def test_prepare_runs_on_the_host_without_an_image(prepare_env):
@@ -206,3 +215,19 @@ def test_prepare_without_results_dir_writes_no_report(prepare_env, tmp_path):
     [res] = runners.run_prepare_steps([{"name": "a", "script": "a"}], None)
     assert res.passed and res.artifacts == {}
     assert list(tmp_path.iterdir()) == []
+
+
+def test_snapshot_test_includes_a_loader_with_the_replay(shell_env, tmp_path):
+    from hector.pipeline import SnapshotSetup
+    runners, ctx, _ = shell_env
+    (tmp_path / "s.save").write_text("x")
+    ctx.snapshot = str(tmp_path / "s.save")
+    ctx.snapshot_setup = SnapshotSetup(after_load=['mach set "mcu"', "connector Connect a b"])
+    runners._run_shell_test({"name": "t", "type": "shell", "requires-machine": True},
+                            [{"script": "true"}], ctx, 3)
+    [loader] = [c[1] for c in _FakeSim.calls if c[0] == "include"]
+    text = open(loader).read()
+    assert loader.endswith("job_1_test_3_snapshot.resc")
+    load = next(line for line in text.splitlines() if line.startswith("Load @"))
+    assert load.endswith("/s.save")
+    assert text.index(load) < text.index("connector Connect a b") < text.index("start")

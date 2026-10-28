@@ -76,6 +76,13 @@ def _extra_mounts():
     return args
 
 
+def _renode_flags():
+    """Flags for the containers running Renode: no core dumps (a crashing Renode would
+    write a multi-GB core file into the project), then the user's renode.docker-flags,
+    which win over it (Docker keeps the last --ulimit per name)."""
+    return ["--ulimit", "core=0", *core.RENODE_DOCKER_FLAGS]
+
+
 # Every container shares the host's network stack: GDB servers, tcp: mappings and
 # anything a build/test step listens on are reachable from the host as-is, and steps
 # can reach host services (e.g. a local registry or a TCP-mapped UART) on localhost.
@@ -113,7 +120,7 @@ def run_build(script, image):
         return
     subprocess.run(
         ["docker", "run", "--rm", *_HOST_NETWORK, "-u", "0:0",
-         *_workspace_mount(), *_extra_mounts(), *core.RENODE_DOCKER_FLAGS,
+         *_workspace_mount(), *_extra_mounts(), *_renode_flags(),
          image, "bash", "-c", script],
         check=True,
     )
@@ -190,7 +197,7 @@ def build_renode_argv(resc_filename, image, extra_args=None, runtime=None):
     if core.NO_DOCKER:
         return ["renode", os.path.abspath(resc_filename)] + (extra_args or [])
     return ["docker", "run", "-it", "--rm", *_xdisplay_args(), *_HOST_NETWORK,
-            *_workspace_mount(), *_extra_mounts(), *core.RENODE_DOCKER_FLAGS,
+            *_workspace_mount(), *_extra_mounts(), *_renode_flags(),
             *_user_flags(core.RENODE_DOCKER_FLAGS), *_runtime_flags(runtime),
             image, "renode", to_container_path(resc_filename)] + (extra_args or [])
 
@@ -238,7 +245,7 @@ class BackgroundRenode:
                                           stdout=self._log, stderr=subprocess.STDOUT)
         else:
             subprocess.run(["docker", "run", "-d", "--name", self.name, *_HOST_NETWORK,
-                            *_workspace_mount(), *_extra_mounts(), *core.RENODE_DOCKER_FLAGS,
+                            *_workspace_mount(), *_extra_mounts(), *_renode_flags(),
                             *_user_flags(core.RENODE_DOCKER_FLAGS),
                             *_runtime_flags(self.runtime), self.image, *argv],
                            check=True, stdout=subprocess.DEVNULL)
@@ -355,7 +362,7 @@ def run_renode_test(robot_file_host, image, results_dir_host,
     display = _xdisplay_args() if interactive else []
     cmd = ["docker", "run", "--rm", *flags, *_HOST_NETWORK, *display,
            *_workspace_mount(workdir=results_dir), *_extra_mounts(),
-           *core.RENODE_DOCKER_FLAGS, *_user_flags(core.RENODE_DOCKER_FLAGS),
+           *_renode_flags(), *_user_flags(core.RENODE_DOCKER_FLAGS),
            *_runtime_flags(runtime),
            image, "renode-test", to_container_path(robot_file_host), "-r", results_dir]
     if resc_host_path:

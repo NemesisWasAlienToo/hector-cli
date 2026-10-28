@@ -4,7 +4,30 @@ All notable changes to `hector-cli`. Versions follow [semver](https://semver.org
 while hector is 0.x, a minor version may contain breaking changes (marked
 **Breaking**).
 
-## Unreleased
+## 0.13.0 — 2026-10-28
+
+### Added
+- `$PROJECT`: a Renode monitor variable set to the hectorfile's folder in every
+  generated resc (snapshot loaders too). Save snapshots with
+  `Save $PROJECT/snapshots/x.save`; `hector run` prints this hint.
+
+### Changed
+- `prepare:` steps always stream their output. Before, they streamed only under
+  `hector test --live`, so under `hector run` (which has no `--live`) a long step, e.g.
+  the Verdin example's Renode build, printed nothing until it finished.
+- Renode containers run with `--ulimit core=0`: a crashing Renode no longer writes a
+  multi-hundred-MB core dump into the project. `renode.docker-flags` can override it.
+
+### Fixed
+- Snapshots: `Save @post_boot.save` from `hector run`'s monitor failed with "Access to
+  the path '/opt/renode/…' is denied" (Renode writes relative paths into its install
+  folder) and then crashed Renode. `$PROJECT` gives a working path; changing Renode's
+  working folder instead was tried and rejected — it breaks saving machines with
+  Python peripherals, whose scripts Renode finds relative to its install folder.
+- Loading a snapshot (`--snapshot`, a test's `snapshot:`, robot or `requires-machine`
+  shell tests) now recreates the host-side mappings (`tcp:`, `pty:`, `file:`, `tap:`),
+  which aren't part of a snapshot — e.g. a `tcp:` console port was missing after a
+  load. C# assemblies are imported before `Load`.
 
 ### Docs
 - Examples: READMEs for `multi-machine-uart-link`, `network-ping`, `stm32f103-full`,
@@ -12,6 +35,11 @@ while hector is 0.x, a minor version may contain breaking changes (marked
   grant the TAP's `NET_ADMIN` (it does, automatically); `docker-runner`'s run
   instructions use the repo's paths; `multi-machine-uart-link` describes itself and
   its shell test has a real name.
+
+### Examples
+- `torizon-verdin-imx8mp`: a tlib fix for TLB flushes from generated code, which
+  caused an intermittent `Assert not met ... env->current_tb != NULL` abort (likeliest
+  after `logLevel 0`). Rebuild the image: `hector prepare`.
 
 ## 0.12.0 — 2026-10-27
 

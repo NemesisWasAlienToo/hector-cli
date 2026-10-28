@@ -180,7 +180,7 @@ def test_resc_search_dir_is_the_first_line(tmp_path):
     out = tmp_path / "j.resc"
     text = generate_emulation_resc(_one_machine(), {}, [], None, {}, str(out),
                                    emulation_setup=["i @mod.cs"], search_dir="/w/my board")
-    assert text.splitlines()[0] == "path add @/w/my\\ board"
+    assert text.splitlines()[:2] == ["path add @/w/my\\ board", "$PROJECT=@/w/my\\ board"]
 
 
 def test_resc_without_search_dir_has_no_path_add(tmp_path):
@@ -223,3 +223,14 @@ def test_collect_artifacts_resolves_against_base_dir(tmp_path, monkeypatch):
     assert sorted(collected) == [
         os.path.join("results", "artifacts", "job_1", "board", "build", "fw.bin"),
         os.path.join("results", "artifacts", "job_1", "board", "uart.log")]
+
+
+def test_snapshot_resc_replays_around_load():
+    # Assemblies before Load; host bindings (not in the snapshot) recreated after it.
+    text = snapshot_resc("/w/s.save", work_dir="/w", before_load=["i @/w/p.cs"],
+                         after_load=['emulation CreateServerSocketTerminal 3456 "t"',
+                                     'mach set "mcu"', "connector Connect sysbus.usart2 t"])
+    lines = text.splitlines()
+    assert lines[:2] == ["path add @/w", "$PROJECT=@/w"]
+    assert lines.index("i @/w/p.cs") < lines.index("Load @/w/s.save") < lines.index(
+        "connector Connect sysbus.usart2 t") < lines.index("start")

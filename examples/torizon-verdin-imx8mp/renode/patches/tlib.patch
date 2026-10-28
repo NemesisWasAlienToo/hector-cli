@@ -41,6 +41,19 @@ index a71ccaf8..98a71c91 100644
  
      if(target_el == IRQ_IGNORED) {
          return 0;
+diff --git a/arch/arm64/system_registers.c b/arch/arm64/system_registers.c
+index 4e6b127e..93487ef7 100644
+--- a/arch/arm64/system_registers.c
++++ b/arch/arm64/system_registers.c
+@@ -1055,7 +1055,7 @@ WRITE_FUNCTION(64, tlbi_vmall, {
+     tlbi_print_stub_logs(env, info);
+ 
+     uint16_t indexes_mask = tlbi_get_mmu_indexes_mask(env, info);
+-    tlb_flush_masked(env, indexes_mask);
++    tlb_flush_masked(env, indexes_mask, true);
+ })
+ 
+ ARMCPRegInfo aarch32_instructions[] = {
 diff --git a/arch/arm64/translate-a64.c b/arch/arm64/translate-a64.c
 index b5edc31a..524f75ad 100644
 --- a/arch/arm64/translate-a64.c
@@ -63,3 +76,47 @@ index b5edc31a..524f75ad 100644
  
      if(is_postidx) {
          if(rm == 31) {
+diff --git a/exec.c b/exec.c
+index bdcebb2a..fbe611a2 100644
+--- a/exec.c
++++ b/exec.c
+@@ -1486,11 +1486,13 @@ static inline void tlb_flush_entry(CPUTLBEntry *tlb_entry, target_ulong addr)
+     }
+ }
+ 
+-void tlb_flush_masked(CPUState *env, uint32_t mmu_indexes_mask)
++void tlb_flush_masked(CPUState *env, uint32_t mmu_indexes_mask, bool from_generated_code)
+ {
+-    /* must reset current TB so that interrupts cannot modify the
+-       links while we are modifying them */
+-    env->current_tb = NULL;
++    if(!from_generated_code) {
++        /* must reset current TB so that interrupts cannot modify the
++           links while we are modifying them */
++        env->current_tb = NULL;
++    }
+ 
+     for(int mmu_idx = 0; mmu_idx < NB_MMU_MODES; mmu_idx += 1) {
+         if(extract32(mmu_indexes_mask, mmu_idx, 1)) {
+@@ -1509,7 +1511,7 @@ void tlb_flush_page_masked(CPUState *env, target_ulong addr, uint32_t mmu_indexe
+ 
+     /* Check if we need to flush due to large pages.  */
+     if((addr & env->tlb_flush_mask) == env->tlb_flush_addr) {
+-        tlb_flush(env, 1, false);
++        tlb_flush(env, 1, from_generated_code);
+         return;
+     }
+     if(!from_generated_code) {
+diff --git a/include/exec-all.h b/include/exec-all.h
+index 0fee8ba9..468ba293 100644
+--- a/include/exec-all.h
++++ b/include/exec-all.h
+@@ -80,7 +80,7 @@ void TLIB_NORETURN cpu_loop_exit(CPUState *env1);
+ void TLIB_NORETURN cpu_loop_exit_restore(CPUState *env1, uintptr_t pc, uint32_t call_hook);
+ void tb_invalidate_phys_page_range(tb_page_addr_t start, tb_page_addr_t end, int is_cpu_write_access);
+ void tlb_flush(CPUState *env, int flush_global, bool from_generated_code);
+-void tlb_flush_masked(CPUState *env, uint32_t mmu_indexes_mask);
++void tlb_flush_masked(CPUState *env, uint32_t mmu_indexes_mask, bool from_generated_code);
+ void tlb_flush_page(CPUState *env, target_ulong addr, bool from_generated_code);
+ void tlb_flush_page_masked(CPUState *env, target_ulong addr, uint32_t mmu_indexes_mask, bool from_generated_code);
+ int tlb_fill(CPUState *env, target_ulong addr, int is_write, int mmu_idx, void *retaddr, int no_page_fault, int access_width);

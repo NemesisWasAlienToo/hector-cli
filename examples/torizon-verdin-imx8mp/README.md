@@ -54,7 +54,8 @@ The patches add:
 
 - new models for the GPC, the system counter and the DDR controller;
 - the GIC wake request and the SRC core release;
-- tlib fixes for SCR_EL3 interrupt routing and AdvSIMD `st4`;
+- tlib fixes for SCR_EL3 interrupt routing, AdvSIMD `st4`, and TLB flushes from generated
+  code (an intermittent `env->current_tb != NULL` abort, likeliest after `logLevel 0`);
 - a faster generic timer counter and uSDHC DMA;
 - PLL, OCRAM_S and DDRC setup in the SoC description.
 

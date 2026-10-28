@@ -69,15 +69,16 @@ def _nodes(*names):
 
 def test_resolve_queues_command_and_collects_emulation():
     nodes = _nodes("mcu")
-    emu, runtime = resolve_mappings(["mcu.uart4 -> tcp:4567"], nodes)
+    emu, runtime, cmds = resolve_mappings(["mcu.uart4 -> tcp:4567"], nodes)
     assert nodes["mcu"]["_gen_commands"] == ["connector Connect sysbus.uart4 ss_mcu_uart4"]
+    assert cmds == [("mcu", "connector Connect sysbus.uart4 ss_mcu_uart4")]
     assert emu == ['emulation CreateServerSocketTerminal 4567 "ss_mcu_uart4"']
     assert runtime.capabilities == set()
 
 
 def test_resolve_merges_runtime_from_tap():
     nodes = _nodes("mcu")
-    _emu, runtime = resolve_mappings(["mcu.eth0 -> tap:tap0"], nodes)
+    _emu, runtime, _cmds = resolve_mappings(["mcu.eth0 -> tap:tap0"], nodes)
     assert runtime.root is True and "NET_ADMIN" in runtime.capabilities
 
 

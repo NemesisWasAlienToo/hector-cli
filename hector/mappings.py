@@ -151,11 +151,14 @@ def qualify_node_mapping(line, node_name, known_nodes=()):
 def resolve_mappings(mappings, concrete_nodes):
     """Process each mapping line; queue machine commands on nodes.
 
-    Returns (emulation_lines, runtime): the emulation-level setup lines to emit before
-    machine blocks, and the merged RuntimeOptions any backend declared (e.g. a tap needs
-    TUN/TAP access) so the caller can grant them without re-scanning the generated resc."""
+    Returns (emulation_lines, runtime, machine_cmds): the emulation-level setup lines to
+    emit before machine blocks, the merged RuntimeOptions any backend declared (e.g. a
+    tap needs TUN/TAP access) so the caller can grant them without re-scanning the
+    generated resc, and the queued [(node, command)] — host bindings aren't part of a
+    snapshot, so a snapshot loader replays both lists after `Load`."""
     emulation_lines = []
     runtime = RuntimeOptions()
+    machine_cmds = []
     for line in mappings:
         if "->" not in line:
             raise ValueError(f"Mapping '{line}' has no '->' operator")
@@ -173,8 +176,9 @@ def resolve_mappings(mappings, concrete_nodes):
         handler = MAPPING_BACKENDS.get(backend)
         result = handler(node, ep["name"], param, concrete_nodes[node])
         queue_command(concrete_nodes[node], result.machine_cmd)
+        machine_cmds.append((node, result.machine_cmd))
         emulation_lines.extend(result.emulation_lines)
         runtime.merge(result.runtime)
         print(f"[MAP]  {node}.{ep['name']} -> {backend}:{param or ''}")
 
-    return emulation_lines, runtime
+    return emulation_lines, runtime, machine_cmds
